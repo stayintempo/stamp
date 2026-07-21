@@ -4,6 +4,7 @@
   "description": "Browser-only guided QA walkthrough over a markdown checklist in a GitHub repo, synced to a GitHub issue.",
   "type": "module",
   "license": "MIT",
+  "author": "Jason Legate",
   "private": true,
   "engines": {
     "node": ">=22"
