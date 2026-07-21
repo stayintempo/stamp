@@ -77,6 +77,10 @@ describe('extractLabel', () => {
     expect(extractLabel('**Power on.** Flip the switch.')).toBe('Power on.');
   });
 
+  it('with multiple bold spans, uses the first', () => {
+    expect(extractLabel('**First label** and **second label** follow.')).toBe('First label');
+  });
+
   it('falls back to the first sentence and strips link syntax', () => {
     expect(extractLabel('Open [the panel](https://x/y) now. Then wait.')).toBe('Open the panel now.');
   });
@@ -86,6 +90,90 @@ describe('extractLabel', () => {
     expect(label.length).toBeLessThanOrEqual(80);
     expect(label.endsWith('…')).toBe(true);
   });
+
+  it('preserves unicode in labels', () => {
+    expect(extractLabel('**Café ☕ ready.** Enjoy.')).toBe('Café ☕ ready.');
+  });
+});
+
+describe('parser edge cases', () => {
+  it('natural sort orders 2 before 10 across phase folders', () => {
+    const files = [
+      { path: 'QA/2_two/README.md', content: '# Two\n- [ ] a' },
+      { path: 'QA/10_ten/README.md', content: '# Ten\n- [ ] b' },
+      { path: 'QA/1_one/README.md', content: '# One\n- [ ] c' },
+    ];
+    const doc = buildRunDoc(src, files);
+    expect(doc.phases.map((p) => p.title)).toEqual(['One', 'Two', 'Ten']);
+  });
+
+  it('when a folder has BOTH numeric files and a README, numeric files are the groups', () => {
+    const files = [
+      { path: 'QA/README.md', content: '# Maint\n\nintro prose' },
+      { path: 'QA/01-a.md', content: '# A\n- [ ] step a' },
+      { path: 'QA/02-b.md', content: '# B\n- [ ] step b' },
+    ];
+    const doc = buildRunDoc(src, files);
+    expect(doc.phases[0].title).toBe('Maint');
+    expect(doc.phases[0].intro).toContain('intro prose');
+    expect(doc.phases[0].groups.map((g) => g.filePath)).toEqual(['QA/01-a.md', 'QA/02-b.md']);
+  });
+
+  it('handles CRLF line endings', () => {
+    const p = parseFileSteps('# T\r\n\r\n- [ ] **Win step.** ok\r\n  - nested\r\n');
+    expect(p.title).toBe('T');
+    expect(p.steps).toHaveLength(1);
+    expect(p.steps[0].label).toBe('Win step.');
+    expect(p.steps[0].body).toContain('nested');
+  });
+
+  it('disambiguates duplicate step text by ordinal in the id', () => {
+    const p = 'QA/dup.md';
+    const doc = buildRunDoc(src, [{ path: p, content: '# D\n- [ ] same text\n- [ ] same text' }]);
+    const ids = flattenSteps(doc).map((x) => x.step.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2); // unique despite identical text
+    expect(ids[0]).toContain('#1-');
+    expect(ids[1]).toContain('#2-');
+  });
+
+  it('humanizes a folder name when no H1 is present', () => {
+    const doc = buildRunDoc(src, [{ path: 'QA/00_Operator_Setup/README.md', content: '- [ ] no heading here' }]);
+    expect(doc.phases[0].title).toBe('Operator Setup');
+  });
+
+  it('does not crash on an empty file set', () => {
+    const doc = buildRunDoc(src, []);
+    expect(doc.phases).toHaveLength(1);
+    expect(doc.phases[0].groups).toHaveLength(0);
+  });
+
+  it('produces an empty phase when a folder has only non-markdown files', () => {
+    const doc = buildRunDoc(src, [
+      { path: 'QA/01_x/logo.png' as string, content: 'binary' },
+      { path: 'QA/02_y/README.md', content: '# Y\n- [ ] real' },
+    ]);
+    const x = doc.phases.find((p) => p.id.includes('01-x'));
+    expect(x?.groups).toHaveLength(0);
+    const y = doc.phases.find((p) => p.title === 'Y')!;
+    expect(y.groups[0].steps).toHaveLength(1);
+  });
+});
+
+describe('H1 badge variants', () => {
+  const cases: Array<[string, string, string | undefined]> = [
+    ['# 1. Auth [BLOCKING]', '1. Auth', 'BLOCKING'],
+    ['# 2. Notes [INFORMATIONAL]', '2. Notes', 'INFORMATIONAL'],
+    ['# 3. Plain title', '3. Plain title', undefined],
+    ['# 4. Bracketed [but not a badge]', '4. Bracketed [but not a badge]', undefined],
+  ];
+  for (const [h1, title, badge] of cases) {
+    it(`${h1} -> title="${title}" badge=${badge}`, () => {
+      const p = parseFileSteps(`${h1}\n\n- [ ] x`);
+      expect(p.title).toBe(title);
+      expect(p.badge).toBe(badge);
+    });
+  }
 });
 
 describe('buildRunDoc (directory with subfolders)', () => {
