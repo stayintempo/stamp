@@ -4,6 +4,7 @@ import {
   resolveLink,
   rewriteLinks,
   suggestAppHost,
+  normalizeAppHost,
   APP_TAB,
   DOCS_TAB,
   type LinkContext,
@@ -67,6 +68,38 @@ describe('resolveLink', () => {
   it('falls back to the docs tab when no app host is configured', () => {
     const noHost: LinkContext = { ...ctx, appHost: undefined };
     expect(resolveLink('https://machine.local/panel', noHost)!.tab).toBe(DOCS_TAB);
+  });
+
+  it('matches an app host that includes a port (M2)', () => {
+    const ported: LinkContext = { ...ctx, appHost: 'localhost:5173' };
+    expect(resolveLink('http://localhost:5173/x', ported)!.tab).toBe(APP_TAB);
+    // negative: a different port is NOT the app host
+    expect(resolveLink('http://localhost:3000/x', ported)!.tab).toBe(DOCS_TAB);
+    // negative: bare host without the port does not match a ported app host
+    expect(resolveLink('http://localhost/x', ported)!.tab).toBe(DOCS_TAB);
+  });
+
+  it('tolerates a user-entered app host with scheme/path/trailing slash (M2)', () => {
+    const messy: LinkContext = { ...ctx, appHost: 'https://Machine.Local/panel/' };
+    expect(resolveLink('https://machine.local/x', messy)!.tab).toBe(APP_TAB);
+  });
+
+  it('treats a protocol-relative //host href as absolute, not repo-relative (L6)', () => {
+    const r = resolveLink('//cdn.example.com/asset.js', ctx)!;
+    expect(r.href).toBe('https://cdn.example.com/asset.js');
+    expect(r.tab).toBe(DOCS_TAB);
+    // and it routes to the app tab when it is the app host
+    const app: LinkContext = { ...ctx, appHost: 'machine.local' };
+    expect(resolveLink('//machine.local/panel', app)!.tab).toBe(APP_TAB);
+  });
+});
+
+describe('normalizeAppHost', () => {
+  it('strips scheme, path, trailing slash and lowercases; keeps the port', () => {
+    expect(normalizeAppHost('https://App.Example.com:8443/foo/')).toBe('app.example.com:8443');
+    expect(normalizeAppHost('  localhost:5173  ')).toBe('localhost:5173');
+    expect(normalizeAppHost(undefined)).toBe('');
+    expect(normalizeAppHost('')).toBe('');
   });
 });
 

@@ -37,12 +37,28 @@ export function resolvePath(baseDir: string, rel: string): string {
   return out.join('/');
 }
 
+/** URL.host — includes the port — so `localhost:5173` matches an app host with a port. */
 function hostOf(href: string): string | undefined {
   try {
-    return new URL(href).hostname;
+    return new URL(href).host || undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Normalize a user-entered app host to a bare `host[:port]`: drop any scheme,
+ * path, and trailing slash, and lowercase it so comparison against URL.host is
+ * stable. `https://localhost:5173/app/` -> `localhost:5173`.
+ */
+export function normalizeAppHost(input: string | undefined): string {
+  if (!input) return '';
+  return input
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '') // scheme://
+    .replace(/\/.*$/, '') // path and everything after
+    .replace(/\/+$/, '')
+    .toLowerCase();
 }
 
 /**
@@ -55,11 +71,14 @@ export function resolveLink(href: string, ctx: LinkContext): { href: string; tab
   // Leave in-page/protocol links (mailto:, javascript: already stripped) alone.
   if (/^(mailto:|tel:)/i.test(href)) return { href, tab: DOCS_TAB };
 
-  const host = hostOf(href);
+  // Protocol-relative (//host/x) is an absolute link, not a repo-relative path.
+  const candidate = href.startsWith('//') ? `https:${href}` : href;
+  const host = hostOf(candidate);
   if (host) {
-    // Absolute http(s) link.
-    if (ctx.appHost && host === ctx.appHost) return { href, tab: APP_TAB };
-    return { href, tab: DOCS_TAB };
+    // Absolute http(s) link (host includes the port).
+    const appHost = normalizeAppHost(ctx.appHost);
+    if (appHost && host.toLowerCase() === appHost) return { href: candidate, tab: APP_TAB };
+    return { href: candidate, tab: DOCS_TAB };
   }
 
   // Relative link or bare anchor -> GitHub blob at the pinned SHA.
