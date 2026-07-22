@@ -206,6 +206,26 @@ export class GithubClient {
     return this.toIssueRef(await res.json());
   }
 
+  /**
+   * Fire-and-forget PATCH suitable for pagehide/visibilitychange: uses
+   * `keepalive` so the request survives the page being torn down, and never
+   * awaits (there is no time to). Errors are swallowed — localStorage still
+   * holds the truth for the next session.
+   */
+  patchIssueBodyKeepalive(owner: string, repo: string, num: number, body: string): void {
+    const url = `${this.apiBase}/repos/${owner}/${repo}/issues/${num}`;
+    try {
+      void this.fetchImpl(url, {
+        method: 'PATCH',
+        keepalive: true,
+        headers: { ...this.headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      }).catch(() => {});
+    } catch {
+      /* keepalive unsupported or synchronous throw — best effort only */
+    }
+  }
+
   async addComment(owner: string, repo: string, num: number, body: string): Promise<void> {
     await this.request(`/repos/${owner}/${repo}/issues/${num}/comments`, {
       method: 'POST',

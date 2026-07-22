@@ -263,6 +263,20 @@ describe('buildRunDoc (directory with subfolders)', () => {
   });
 });
 
+describe('buildRunDoc (blob URL to a single file)', () => {
+  it('produces one phase with one group from a single .md file', () => {
+    const doc = buildRunDoc({ ...src, path: 'QA/steps.md' }, [
+      { path: 'QA/steps.md', content: '# Steps [BLOCKING]\n\nintro line\n\n- [ ] **A.** do\n- [ ] **B.** do' },
+    ]);
+    expect(doc.phases).toHaveLength(1);
+    expect(doc.phases[0].title).toBe('Steps');
+    expect(doc.phases[0].badge).toBe('BLOCKING');
+    expect(doc.phases[0].intro).toContain('intro line');
+    expect(doc.phases[0].groups).toHaveLength(1);
+    expect(flattenSteps(doc).map((s) => s.step.label)).toEqual(['A.', 'B.']);
+  });
+});
+
 describe('buildRunDoc (numeric step-group files)', () => {
   const doc = buildRunDoc(src, numericPhaseFiles);
 

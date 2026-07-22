@@ -11,11 +11,23 @@ interface Props {
   /** Markdown mirror for the copy-to-clipboard (local-only) path. */
   mirror: string;
   posting: boolean;
+  /** True once the summary comment has posted successfully. */
+  posted?: boolean;
+  postError?: string;
   onPostSummary: () => void;
   onBack: () => void;
 }
 
-export function FinishView({ summary, issueUrl, mirror, posting, onPostSummary, onBack }: Props) {
+export function FinishView({
+  summary,
+  issueUrl,
+  mirror,
+  posting,
+  posted,
+  postError,
+  onPostSummary,
+  onBack,
+}: Props) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -64,9 +76,11 @@ export function FinishView({ summary, issueUrl, mirror, posting, onPostSummary, 
       <div class="stack">
         {issueUrl ? (
           <>
-            <button class="primary" onClick={onPostSummary} disabled={posting}>
-              {posting ? 'Posting…' : 'Post summary comment to issue'}
+            <button class="primary" onClick={onPostSummary} disabled={posting || posted}>
+              {posting ? 'Posting…' : posted ? '✓ Summary posted' : 'Post summary comment to issue'}
             </button>
+            {posted && <div class="statusline pass">Summary comment posted to the issue.</div>}
+            {postError && <div class="error">Could not post summary: {postError}</div>}
             <a href={issueUrl} target="qa-docs" rel="noopener noreferrer">
               Open the run issue ↗
             </a>

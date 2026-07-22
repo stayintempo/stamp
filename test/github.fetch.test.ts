@@ -99,6 +99,26 @@ describe('GithubClient happy paths', () => {
   });
 });
 
+describe('getRawFile path encoding', () => {
+  it('percent-encodes each path segment but preserves the slashes', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => res(null, { text: '# file' }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await c.getRawFile('o', 'r', 'QA/01 Brew & Steam/README.md', 'sha9');
+    const url = String(fetchImpl.mock.calls[0][0]);
+    expect(url).toContain('/contents/QA/01%20Brew%20%26%20Steam/README.md?ref=sha9');
+    // negative: the space/ampersand are NOT left raw
+    expect(url).not.toContain('Brew & Steam');
+  });
+
+  it('requests the raw media type', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => res(null, { text: 'x' }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await c.getRawFile('o', 'r', 'a.md', 'sha');
+    const headers = (fetchImpl.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    expect(headers.Accept).toBe('application/vnd.github.raw+json');
+  });
+});
+
 describe('GithubClient error mapping', () => {
   const cases: Array<[string, Parameters<typeof res>[1], RegExp]> = [
     ['401 -> token invalid', { status: 401 }, /invalid or missing scope/i],

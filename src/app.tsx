@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { RunDoc, Phase, StepGroup, Step } from './lib/types';
 import {
   GithubClient,
@@ -9,10 +9,13 @@ import {
 } from './lib/github';
 import {
   applyStateToBody,
+  canonicalDocUrl,
+  countUnrepresentedSteps,
   emptyState,
   loadRunState,
   loadSettings,
   parseIssueBody,
+  parseMarker,
   saveRunState,
   saveSettings,
   serializeIssueBody,
@@ -26,15 +29,21 @@ import {
   type StepStatus,
 } from './lib/state';
 import { createDebouncer } from './lib/debounce';
-import { suggestAppHost, type LinkContext } from './lib/links';
+import { normalizeAppHost, suggestAppHost, type LinkContext } from './lib/links';
 import { Markdown } from './components/Markdown';
 import { SetupScreen } from './components/SetupScreen';
-import { RunHeader } from './components/RunHeader';
+import { SettingsOverlay } from './components/SettingsOverlay';
+import { RunHeader, type SyncStatus } from './components/RunHeader';
 import { PhaseNav } from './components/PhaseNav';
 import { StepCard } from './components/StepCard';
 import { FinishView } from './components/FinishView';
 
 const VERSION = __APP_VERSION__;
+
+/** Injectable so tests can supply a GithubClient wired to a mock fetch. */
+export interface AppProps {
+  createClient?: (token: string | undefined) => GithubClient;
+}
 
 type View = 'setup' | 'start' | 'run' | 'finish';
 
@@ -67,7 +76,9 @@ function buildNav(doc: RunDoc): NavItem[] {
 
 const emptySettings: Settings = { githubUrl: '', token: '', appHost: '' };
 
-export function App() {
+export function App({ createClient }: AppProps = {}) {
+  const makeClient = createClient ?? ((token: string | undefined) => new GithubClient({ token }));
+
   const [view, setView] = useState<View>('setup');
   const [settings, setSettings] = useState<Settings>(loadSettings() ?? emptySettings);
   const [doc, setDoc] = useState<RunDoc | null>(null);
@@ -80,17 +91,28 @@ export function App() {
   const [discovered, setDiscovered] = useState<IssueRef[]>([]);
   const [resumeInput, setResumeInput] = useState('');
   const [posting, setPosting] = useState(false);
+  const [posted, setPosted] = useState(false);
+  const [postError, setPostError] = useState<string | undefined>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
+  const [syncNotice, setSyncNotice] = useState(0);
+  const [shaMismatch, setShaMismatch] = useState<IssueRef | null>(null);
 
   const clientRef = useRef<GithubClient | null>(null);
   // Latest values for the debounced PATCH, which closes over stale state otherwise.
   const latest = useRef({ doc, runState, issue, settings });
   latest.current = { doc, runState, issue, settings };
 
+  // Flush serialization + retry bookkeeping.
+  const flushInFlight = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
+  const lastBody = useRef<string | null>(null);
+
   const nav = useMemo(() => (doc ? buildNav(doc) : []), [doc]);
   const summary = useMemo(() => (doc ? summarize(doc, runState) : null), [doc, runState]);
 
   const meta = (d: RunDoc): RunMeta => ({
-    docUrl: settings.githubUrl,
+    docUrl: canonicalDocUrl(d.source),
     sha: d.source.sha,
     path: d.source.path,
     tool: `stamp@${VERSION}`,
@@ -103,42 +125,108 @@ export function App() {
     }, 3000),
   );
 
-  async function flushPatch() {
+  /** One PATCH cycle: GET current body, merge state, PUT. Returns success. */
+  async function patchOnce(): Promise<boolean> {
     const { doc: d, runState: rs, issue: iss } = latest.current;
     const client = clientRef.current;
-    if (!d || !iss || !client) return;
+    if (!d || !iss || !client) return true;
     try {
       const current = await client.getIssue(d.source.owner, d.source.repo, iss.number);
+      lastBody.current = current.body;
       const merged = applyStateToBody(current.body, d, rs);
       await client.updateIssueBody(d.source.owner, d.source.repo, iss.number, merged);
+      lastBody.current = merged;
+      setSyncNotice(countUnrepresentedSteps(merged, d));
+      setSyncStatus('synced');
+      return true;
     } catch {
-      // Network hiccups are non-fatal: localStorage holds the truth and the
-      // next change re-attempts a full-state merge.
+      // Non-fatal: localStorage holds the truth. Stay dirty so the next debounce
+      // tick or the manual Retry re-attempts a full-state merge.
+      dirty.current = true;
+      setSyncStatus('error');
+      return false;
+    }
+  }
+
+  /**
+   * Serialize flushes: only one PATCH cycle runs at a time; if more changes
+   * arrive while it's in flight, run exactly once more when it settles (M1). A
+   * failed cycle stops the loop (no hot retry) but leaves state dirty.
+   */
+  async function flushPatch(): Promise<void> {
+    dirty.current = true;
+    if (flushInFlight.current) return flushInFlight.current;
+    const run = (async () => {
+      while (dirty.current) {
+        dirty.current = false;
+        const ok = await patchOnce();
+        if (!ok) break;
+      }
+    })();
+    flushInFlight.current = run;
+    try {
+      await run;
+    } finally {
+      flushInFlight.current = null;
     }
   }
 
   function persist(next: RunState) {
     setRunState(next);
+    // A new change means the last posted summary is now stale; re-enable posting.
+    setPosted(false);
+    setPostError(undefined);
     const d = latest.current.doc;
     if (!d) return;
-    saveRunState(settings.githubUrl, d.source.sha, issue?.number ?? null, next);
-    if (issue && !localOnly) patcher.current.schedule();
+    saveRunState(canonicalDocUrl(d.source), d.source.sha, issue?.number ?? null, next);
+    if (issue && !localOnly) {
+      dirty.current = true;
+      setSyncStatus('pending');
+      patcher.current.schedule();
+    }
   }
+
+  // Flush the last change if the tab is being hidden/closed within the debounce
+  // window, using a keepalive PATCH so it survives teardown (H4c).
+  useEffect(() => {
+    if (view !== 'run' || !issue || localOnly) return;
+    const flush = () => {
+      const client = clientRef.current;
+      const { doc: d, runState: rs, issue: iss } = latest.current;
+      if (!client || !d || !iss) return;
+      if (!dirty.current && !patcher.current.pending()) return;
+      const base = lastBody.current;
+      const body = base != null ? applyStateToBody(base, d, rs) : serializeIssueBody(d, rs, meta(d));
+      client.patchIssueBodyKeepalive(d.source.owner, d.source.repo, iss.number, body);
+      dirty.current = false;
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, issue, localOnly]);
 
   // --- connect / load ---
   async function connect(s: Settings) {
-    setSettings(s);
-    saveSettings(s);
+    const normalized: Settings = { ...s, appHost: normalizeAppHost(s.appHost) };
+    setSettings(normalized);
+    saveSettings(normalized);
     setBusy(true);
     setError(undefined);
     try {
-      const parsed = parseSourceUrl(s.githubUrl);
-      const client = new GithubClient({ token: s.token || undefined });
+      const parsed = parseSourceUrl(normalized.githubUrl);
+      const client = makeClient(normalized.token || undefined);
       clientRef.current = client;
       const loaded = await loadRunDoc(client, parsed);
       setDoc(loaded);
       // Suggest an app host from the doc if the field was left blank.
-      if (!s.appHost) {
+      if (!normalized.appHost) {
         const all = loaded.phases
           .flatMap((p) => [
             p.intro ?? '',
@@ -147,14 +235,22 @@ export function App() {
           .join('\n');
         const guess = suggestAppHost((loaded.preamble ?? '') + '\n' + all);
         if (guess) {
-          const s2 = { ...s, appHost: guess };
+          const s2 = { ...normalized, appHost: guess };
           setSettings(s2);
           saveSettings(s2);
         }
       }
-      // Best-effort discovery of resumable issues.
+      // Best-effort discovery of resumable issues for THIS doc only.
       try {
-        setDiscovered(await client.listStampIssues(parsed.owner, parsed.repo, STAMP_MARKER));
+        const canonical = canonicalDocUrl(loaded.source);
+        setDiscovered(
+          await client.listStampIssues(
+            parsed.owner,
+            parsed.repo,
+            STAMP_MARKER,
+            (body) => parseMarker(body)?.docUrl === canonical,
+          ),
+        );
       } catch {
         setDiscovered([]);
       }
@@ -179,8 +275,11 @@ export function App() {
       const created = await client.createIssue(d.source.owner, d.source.repo, title, body);
       setIssue(created);
       setLocalOnly(false);
-      const restored = loadRunState(settings.githubUrl, d.source.sha, created.number);
+      lastBody.current = created.body;
+      const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, created.number);
       setRunState(restored);
+      setSyncStatus('synced');
+      setSyncNotice(0);
       setCurrentIndex(firstPending(d, restored));
       setView('run');
     } catch (e) {
@@ -201,15 +300,10 @@ export function App() {
     }
     setBusy(true);
     setError(undefined);
+    setShaMismatch(null);
     try {
       const found = await client.getIssue(d.source.owner, d.source.repo, number);
-      const parsed = parseIssueBody(found.body, d);
-      setIssue(found);
-      setLocalOnly(false);
-      setRunState(parsed);
-      saveRunState(settings.githubUrl, d.source.sha, found.number, parsed);
-      setCurrentIndex(firstPending(d, parsed));
-      setView('run');
+      validateAndResume(found, d, false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -217,12 +311,65 @@ export function App() {
     }
   }
 
+  /**
+   * Validate a fetched issue before adopting it as run state (H2): it MUST carry
+   * a STAMP marker whose docUrl/path match the loaded doc, or we refuse (a typo'd
+   * number would otherwise let the next PATCH destructively rewrite a foreign
+   * issue). A marker SHA differing from the loaded doc requires explicit
+   * confirmation. Returns whether the run was adopted.
+   */
+  function validateAndResume(found: IssueRef, d: RunDoc, ignoreSha: boolean): boolean {
+    const marker = parseMarker(found.body);
+    if (!marker) {
+      setError(`Issue #${found.number} is not a STAMP run (no marker found).`);
+      return false;
+    }
+    const canonical = canonicalDocUrl(d.source);
+    if (marker.docUrl !== canonical || marker.path !== d.source.path) {
+      setError(
+        `Issue #${found.number} was created for a different checklist (${marker.docUrl}). Refusing to overwrite it.`,
+      );
+      return false;
+    }
+    if (marker.sha !== d.source.sha && !ignoreSha) {
+      setShaMismatch(found);
+      return false;
+    }
+
+    // localStorage is the truth: if a local run exists for this (doc, sha, issue)
+    // adopt it and schedule a PATCH to bring the issue up to date; otherwise read
+    // state out of the issue body (H4b).
+    const local = loadRunState(canonical, d.source.sha, found.number);
+    const hasLocal = Object.keys(local.statuses).length > 0;
+    const state = hasLocal ? local : parseIssueBody(found.body, d);
+
+    setIssue(found);
+    setLocalOnly(false);
+    setRunState(state);
+    saveRunState(canonical, d.source.sha, found.number, state);
+    lastBody.current = found.body;
+    setShaMismatch(null);
+    setError(undefined);
+    setCurrentIndex(firstPending(d, state));
+    if (hasLocal) {
+      dirty.current = true;
+      setSyncStatus('pending');
+      patcher.current.schedule();
+    } else {
+      setSyncStatus('synced');
+      setSyncNotice(countUnrepresentedSteps(found.body, d));
+    }
+    setView('run');
+    return true;
+  }
+
   function startLocal() {
     const d = doc;
     if (!d) return;
     setLocalOnly(true);
     setIssue(null);
-    const restored = loadRunState(settings.githubUrl, d.source.sha, null);
+    setSyncStatus('idle');
+    const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, null);
     setRunState(restored);
     setCurrentIndex(firstPending(d, restored));
     setView('run');
@@ -232,16 +379,40 @@ export function App() {
     const d = doc;
     const client = clientRef.current;
     if (!d || !issue || !client || !summary) return;
+    if (posting || posted) return; // guard double-post (M6)
     setPosting(true);
+    setPostError(undefined);
     try {
-      patcher.current.flush();
+      patcher.current.cancel();
       await flushPatch();
       await client.addComment(d.source.owner, d.source.repo, issue.number, summaryComment(d, runState));
+      setPosted(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setPostError(e instanceof Error ? e.message : String(e));
     } finally {
       setPosting(false);
     }
+  }
+
+  // --- in-run settings (H5) ---
+  function applySettingsInPlace(s: Settings) {
+    const normalized: Settings = { ...s, appHost: normalizeAppHost(s.appHost) };
+    setSettings(normalized);
+    saveSettings(normalized);
+    clientRef.current = makeClient(normalized.token || undefined);
+    setSettingsOpen(false);
+  }
+
+  function reconnectFrom(s: Settings) {
+    setSettingsOpen(false);
+    void connect(s);
+  }
+
+  function clearToken() {
+    const next = { ...latest.current.settings, token: '' };
+    setSettings(next);
+    saveSettings(next);
+    clientRef.current = makeClient(undefined);
   }
 
   // --- step actions ---
@@ -263,11 +434,21 @@ export function App() {
     persist(setStep(runState, current.step.id, { note: note || undefined }));
   }
 
+  function retrySync() {
+    void flushPatch();
+  }
+
   // ---------- render ----------
   if (view === 'setup' || !doc || !summary) {
     return (
       <main class="app">
-        <SetupScreen initial={settings} busy={busy} error={error} onConnect={connect} />
+        <SetupScreen
+          initial={settings}
+          busy={busy}
+          error={error}
+          onConnect={connect}
+          onClearToken={clearToken}
+        />
         <Footer />
       </main>
     );
@@ -282,9 +463,12 @@ export function App() {
           error={error}
           discovered={discovered}
           resumeInput={resumeInput}
+          shaMismatch={shaMismatch}
           onResumeInput={setResumeInput}
           onNew={startNewIssue}
           onResume={resumeIssue}
+          onConfirmResume={() => shaMismatch && validateAndResume(shaMismatch, doc, true)}
+          onCancelResume={() => setShaMismatch(null)}
           onLocal={startLocal}
           onBack={() => setView('setup')}
         />
@@ -303,6 +487,8 @@ export function App() {
           issueUrl={issue?.htmlUrl}
           mirror={serializeIssueBody(doc, runState, meta(doc))}
           posting={posting}
+          posted={posted}
+          postError={postError}
           onPostSummary={postSummary}
           onBack={() => setView('run')}
         />
@@ -328,7 +514,10 @@ export function App() {
         doc={doc}
         summary={summary}
         issueUrl={issue?.htmlUrl}
-        onSettings={() => setView('setup')}
+        syncStatus={localOnly ? undefined : syncStatus}
+        syncNotice={syncNotice}
+        onRetrySync={retrySync}
+        onSettings={() => setSettingsOpen(true)}
         onFinish={() => setView('finish')}
       />
       {doc.preamble && (
@@ -336,6 +525,14 @@ export function App() {
           <summary>Run overview</summary>
           <Markdown markdown={doc.preamble} ctx={preambleCtx(doc, settings.appHost)} />
         </details>
+      )}
+      {summary.totals.pending === 0 && (
+        <div class="done-cue">
+          All steps resolved —{' '}
+          <button class="linkish" onClick={() => setView('finish')}>
+            Finish ▸
+          </button>
+        </div>
       )}
       <PhaseNav doc={doc} state={runState} currentIndex={currentIndex} onJump={setCurrentIndex} />
       {current && linkCtx && (
@@ -362,6 +559,17 @@ export function App() {
           onFailResolved={advance}
           onBack={() => setCurrentIndex((i) => Math.max(0, i - 1))}
           onNext={() => setCurrentIndex((i) => Math.min(nav.length - 1, i + 1))}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsOverlay
+          initial={settings}
+          currentUrl={settings.githubUrl}
+          busy={busy}
+          onApplyInPlace={applySettingsInPlace}
+          onReconnect={reconnectFrom}
+          onClearToken={clearToken}
+          onCancel={() => setSettingsOpen(false)}
         />
       )}
       <Footer />
@@ -400,9 +608,12 @@ interface StartProps {
   error?: string;
   discovered: IssueRef[];
   resumeInput: string;
+  shaMismatch: IssueRef | null;
   onResumeInput: (v: string) => void;
   onNew: () => void;
   onResume: () => void;
+  onConfirmResume: () => void;
+  onCancelResume: () => void;
   onLocal: () => void;
   onBack: () => void;
 }
@@ -418,6 +629,23 @@ function StartPanel(p: StartProps) {
         Loaded {p.doc.phases.length} phase(s), pinned to <code>{p.doc.source.sha.slice(0, 7)}</code>.
       </p>
       {p.error && <div class="error">{p.error}</div>}
+
+      {p.shaMismatch && (
+        <div class="warn-box stack">
+          <p>
+            Issue #{p.shaMismatch.number} was created against a different revision of this
+            checklist. Resuming will sync your progress onto it anyway.
+          </p>
+          <div class="row" style={{ gap: '8px' }}>
+            <button class="primary" disabled={p.busy} onClick={p.onConfirmResume}>
+              Resume anyway
+            </button>
+            <button disabled={p.busy} onClick={p.onCancelResume}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <button class="primary" disabled={p.busy} onClick={p.onNew}>
         Start a new run (creates a GitHub issue)
@@ -475,7 +703,7 @@ function nextPending(from: number, state: RunState, nav: NavItem[]): number {
   return Math.min(from + 1, nav.length - 1);
 }
 
-function parseIssueNumber(input: string): number | undefined {
+export function parseIssueNumber(input: string): number | undefined {
   const trimmed = input.trim();
   const fromUrl = trimmed.match(/\/issues\/(\d+)/);
   if (fromUrl) return Number(fromUrl[1]);

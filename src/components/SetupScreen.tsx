@@ -6,14 +6,21 @@ interface Props {
   busy: boolean;
   error?: string;
   onConnect: (s: Settings) => void;
+  /** Clears the stored token (localStorage) and the field. */
+  onClearToken?: () => void;
 }
 
 const PAT_URL = 'https://github.com/settings/personal-access-tokens/new';
 
-export function SetupScreen({ initial, busy, error, onConnect }: Props) {
+export function SetupScreen({ initial, busy, error, onConnect, onClearToken }: Props) {
   const [githubUrl, setGithubUrl] = useState(initial.githubUrl);
   const [token, setToken] = useState(initial.token);
   const [appHost, setAppHost] = useState(initial.appHost);
+
+  const clearToken = () => {
+    setToken('');
+    onClearToken?.();
+  };
 
   return (
     <section class="pad stack">
@@ -66,6 +73,11 @@ export function SetupScreen({ initial, busy, error, onConnect }: Props) {
             scoped to the single repo with <strong>Contents: read-only</strong> and{' '}
             <strong>Issues: read and write</strong>.
           </p>
+          {token && (
+            <button type="button" class="linkish" onClick={clearToken}>
+              Clear stored token
+            </button>
+          )}
         </div>
 
         <div class="field">

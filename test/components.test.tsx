@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/preact';
 import { StepCard } from '../src/components/StepCard';
 import { PhaseNav } from '../src/components/PhaseNav';
+import { FailNoteDialog } from '../src/components/FailNoteDialog';
 import { buildRunDoc, flattenSteps } from '../src/lib/parse';
 import { emptyState, setStep } from '../src/lib/state';
 import type { LinkContext } from '../src/lib/links';
@@ -155,6 +156,45 @@ describe('StepCard', () => {
     fireEvent.click(cancelBtn);
     // Fail verdict already applied; closing advances past the step.
     expect(onFailResolved).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('FailNoteDialog', () => {
+  it('saves the trimmed text on submit', () => {
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+    const { container } = render(
+      <FailNoteDialog open title="Note" initial="" onSave={onSave} onClose={onClose} />,
+    );
+    const ta = container.querySelector('dialog textarea') as HTMLTextAreaElement;
+    fireEvent.input(ta, { target: { value: '  boom  ' } });
+    fireEvent.submit(ta.closest('form')!);
+    expect(onSave).toHaveBeenCalledWith('boom');
+  });
+
+  it('Cancel discards edits: onClose fires and onSave does not', () => {
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+    const { getByText, container } = render(
+      <FailNoteDialog open title="Note" initial="original" onSave={onSave} onClose={onClose} />,
+    );
+    const ta = container.querySelector('dialog textarea') as HTMLTextAreaElement;
+    fireEvent.input(ta, { target: { value: 'typed but discarded' } });
+    fireEvent.click(getByText('Cancel'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('Esc (dialog cancel event) discards and closes without saving', () => {
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+    const { container } = render(
+      <FailNoteDialog open title="Note" initial="" onSave={onSave} onClose={onClose} />,
+    );
+    const dialog = container.querySelector('dialog') as HTMLDialogElement;
+    fireEvent(dialog, new Event('cancel'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSave).not.toHaveBeenCalled();
   });
 });
 
