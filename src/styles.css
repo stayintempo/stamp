@@ -568,6 +568,16 @@ details.intro summary {
   font-weight: 800;
   letter-spacing: 0.02em;
 }
+/* Staging channel marker — amber, distinct from the muted footer text. */
+.staging-tag {
+  color: #b45309;
+  font-weight: 700;
+}
+@media (prefers-color-scheme: dark) {
+  .staging-tag {
+    color: #f5a524;
+  }
+}
 .tagline {
   color: var(--ink-2);
   font-weight: 400;

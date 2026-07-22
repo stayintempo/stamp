@@ -37,6 +37,7 @@ import { RunHeader, type SyncStatus } from './components/RunHeader';
 import { PhaseNav } from './components/PhaseNav';
 import { StepCard } from './components/StepCard';
 import { FinishView } from './components/FinishView';
+import { Footer } from './components/Footer';
 
 const VERSION = __APP_VERSION__;
 
@@ -593,14 +594,6 @@ function preambleCtx(doc: RunDoc, appHost: string): LinkContext {
   };
 }
 
-function Footer() {
-  return (
-    <footer class="appfoot">
-      <span class="brand">STAMP</span>
-      <span>v{VERSION}</span>
-    </footer>
-  );
-}
 
 interface StartProps {
   doc: RunDoc;
