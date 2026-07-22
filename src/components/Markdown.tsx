@@ -5,7 +5,7 @@ import { rewriteLinks, type LinkContext } from '../lib/links';
 interface Props {
   markdown: string | undefined;
   ctx: LinkContext;
-  /** Container class (defaults to "body"). */
+  /** Extra container class, added ALONGSIDE "body" (never instead of it). */
   class?: string;
 }
 
@@ -32,5 +32,9 @@ export function Markdown({ markdown, ctx, class: cls }: Props) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markdown, ctx.filePath, ctx.sha, ctx.appHost, ctx.owner, ctx.repo]);
-  return <div class={cls ?? 'body'} ref={ref} />;
+  // `body` is unconditional: it carries the rules that keep doc-controlled
+  // content inside the column (overflow-x on pre/table, img max-width,
+  // overflow-wrap). A variant class that replaced it silently opted that
+  // surface out — which is how separator prose escaped the column entirely.
+  return <div class={cls ? `body ${cls}` : 'body'} ref={ref} />;
 }
