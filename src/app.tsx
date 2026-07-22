@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useMemo, useRef, useState } from 'preact/hooks';
 import type { RunDoc, Phase, StepGroup, Step } from './lib/types';
 import {
   GithubClient,
@@ -27,7 +27,6 @@ import {
 } from './lib/state';
 import { createDebouncer } from './lib/debounce';
 import { suggestAppHost, type LinkContext } from './lib/links';
-import { resolveKeyAction } from './lib/keys';
 import { Markdown } from './components/Markdown';
 import { SetupScreen } from './components/SetupScreen';
 import { RunHeader } from './components/RunHeader';
@@ -260,37 +259,6 @@ export function App() {
     if (!current) return;
     persist(setStep(runState, current.step.id, { note: note || undefined }));
   }
-
-  // --- keyboard shortcuts (suppressed while typing) ---
-  useEffect(() => {
-    if (view !== 'run') return;
-    const handler = (e: KeyboardEvent) => {
-      const action = resolveKeyAction(e, e.target as HTMLElement | null);
-      if (!action) return;
-      switch (action) {
-        case 'pass':
-          onVerdict('pass');
-          advance();
-          break;
-        case 'skip':
-          onVerdict('skip');
-          advance();
-          break;
-        case 'fail':
-          onVerdict('fail');
-          break;
-        case 'prev':
-          setCurrentIndex((i) => Math.max(0, i - 1));
-          break;
-        case 'next':
-          setCurrentIndex((i) => Math.min(nav.length - 1, i + 1));
-          break;
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, currentIndex, runState, nav]);
 
   // ---------- render ----------
   if (view === 'setup' || !doc || !summary) {

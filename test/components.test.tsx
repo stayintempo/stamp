@@ -89,6 +89,55 @@ describe('StepCard', () => {
     const noIssue = renderStep();
     expect(noIssue.queryByText(/Attach screenshot via issue/)).toBeNull();
   });
+
+  it('opens the note dialog when the keyboard "f" fires (H3)', () => {
+    const { container, onVerdict } = renderStep();
+    fireEvent.keyDown(window, { key: 'f' });
+    expect(onVerdict).toHaveBeenCalledWith('fail');
+    expect(container.querySelector('dialog textarea')).toBeTruthy();
+  });
+
+  it('routes keyboard "p"/"s" through the verdict path', () => {
+    const pass = renderStep();
+    fireEvent.keyDown(window, { key: 'p' });
+    expect(pass.onVerdict).toHaveBeenCalledWith('pass');
+    pass.unmount();
+    const skip = renderStep();
+    fireEvent.keyDown(window, { key: 's' });
+    expect(skip.onVerdict).toHaveBeenCalledWith('skip');
+  });
+
+  it('suppresses shortcuts while the dialog is open (L3)', () => {
+    const { onVerdict } = renderStep();
+    fireEvent.keyDown(window, { key: 'f' }); // opens dialog, 1 fail
+    expect(onVerdict).toHaveBeenCalledTimes(1);
+    // Any further shortcut while the dialog is open is ignored — including focus
+    // on a dialog button, since suppression keys off dialog-open state, not the
+    // focused tag. (A plain BUTTON would otherwise slip past resolveKeyAction.)
+    fireEvent.keyDown(window, { key: 'f' });
+    fireEvent.keyDown(window, { key: 'p' });
+    expect(onVerdict).toHaveBeenCalledTimes(1);
+  });
+
+  it('guards a rapid double verdict keypress within one card (L8)', () => {
+    const { onVerdict } = renderStep();
+    fireEvent.keyDown(window, { key: 'p' });
+    fireEvent.keyDown(window, { key: 'p' });
+    // Second press is swallowed by the per-instance guard.
+    expect(onVerdict).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancelling the dialog after a keyboard fail keeps the fail and advances', () => {
+    const { container, onVerdict, onFailResolved } = renderStep();
+    fireEvent.keyDown(window, { key: 'f' });
+    expect(onVerdict).toHaveBeenCalledWith('fail');
+    const cancelBtn = Array.from(container.querySelectorAll('dialog button')).find(
+      (b) => b.textContent === 'Cancel',
+    ) as HTMLButtonElement;
+    fireEvent.click(cancelBtn);
+    // Fail verdict already applied; closing advances past the step.
+    expect(onFailResolved).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('PhaseNav', () => {

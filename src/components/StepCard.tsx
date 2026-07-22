@@ -1,8 +1,9 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Phase, Step } from '../lib/types';
 import type { StepStatus } from '../lib/state';
 import { screenshotReference } from '../lib/state';
 import { type LinkContext } from '../lib/links';
+import { resolveKeyAction } from '../lib/keys';
 import { Markdown } from './Markdown';
 import { FailNoteDialog } from './FailNoteDialog';
 
@@ -45,6 +46,39 @@ export function StepCard(props: Props) {
       props.onFailResolved();
     }
   };
+
+  // Keyboard shortcuts live here (one StepCard instance per step, remounted via
+  // `key`), so `f` routes through the same verdict path as the button — opening
+  // the note dialog (H3). All shortcuts are suppressed while the dialog is open
+  // (dialog-open state, not tag sniffing) so focus on a dialog button can't leak
+  // a verdict (L3). A per-instance guard blocks a rapid second verdict keypress
+  // from re-marking after the card has already acted (L8).
+  const acted = useRef(false);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (dialogOpen) return;
+      const action = resolveKeyAction(e, e.target as HTMLElement | null);
+      if (!action) return;
+      switch (action) {
+        case 'pass':
+        case 'skip':
+        case 'fail':
+          if (acted.current) return;
+          acted.current = true;
+          verdict(action);
+          break;
+        case 'prev':
+          props.onBack();
+          break;
+        case 'next':
+          props.onNext();
+          break;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dialogOpen]);
 
   const copyScreenshotRef = async () => {
     const ref = screenshotReference(phase.title, step);
