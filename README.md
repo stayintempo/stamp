@@ -128,22 +128,45 @@ npm test           # vitest run
 npm run build      # production build to dist/
 ```
 
-## Deploy to GitHub Pages
+## Deploy to GitHub Pages (staging + prod on one site)
 
-Pushing to `main` runs `.github/workflows/deploy.yml`, which typechecks, tests,
-builds, and publishes `dist/` with `actions/deploy-pages`. Enable Pages for the
-repo with **Source: GitHub Actions**. The build uses `base: './'`, so it works at
-any Pages path regardless of the repo name.
+A single GitHub Pages site serves two channels, and every deploy rebuilds and
+replaces both:
+
+| Channel | URL | Built from |
+| --- | --- | --- |
+| **Prod** | site root (`https://<owner>.github.io/<repo>/`) | the **latest published release tag** (falls back to `main` until the first release exists) |
+| **Staging** | `…/<repo>/staging/` | **`main`** |
+
+`.github/workflows/deploy.yml` runs on push to `main`, on release `published`, and
+via manual dispatch. It typechecks and tests, builds `main` as the staging channel
+(`STAMP_CHANNEL=staging`) into `/staging/`, builds the release tag (or `main` when
+there is no release yet) as the prod channel at the root, assembles one `site/`
+tree, and publishes it with `actions/deploy-pages`. Enable Pages with **Source:
+GitHub Actions**. The build uses `base: './'`, so both the root and the `/staging/`
+subpath resolve their assets correctly.
+
+The footer shows the version and, on staging only, an amber **· staging** marker so
+you always know which channel you are looking at.
 
 ## Releases
 
 Versioning is automated by **release-please** (`.github/workflows/release-please.yml`).
 It reads [Conventional Commits](https://www.conventionalcommits.org/) on `main`
-and opens a release PR that bumps the version and updates the changelog; merging
-that PR cuts the release. Because releases are derived from commit messages,
-**squash-merge titles must themselves be conventional** (`feat:`, `fix:`, …) or
-the change is skipped. The running version is shown in the app footer and pinned
-into each run issue's metadata (`"tool": "stamp@x.y.z"`).
+and opens a release PR that bumps the version and updates the changelog. Because
+releases are derived from commit messages, **squash-merge titles must themselves be
+conventional** (`feat:`, `fix:`, …) or the change is skipped. The running version
+is shown in the app footer and pinned into each run issue's metadata
+(`"tool": "stamp@x.y.z"`).
+
+The deploy flow follows from this:
+
+- **Merge to `main`** → the deploy workflow runs and **staging** updates immediately.
+- **Merge the release-please PR** → a release is **published**, which triggers the
+  workflow again and moves **prod** to the new tag. Staging keeps tracking `main`.
+
+Until the first release is published, prod falls back to `main`, so the root and
+`/staging/` show the same build (the root without the staging marker).
 
 ## v1 limitations
 
