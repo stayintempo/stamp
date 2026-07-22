@@ -20,12 +20,20 @@ const stripMdExt = (name: string): string => name.replace(/\.md$/i, '');
 
 const isReadme = (p: string): boolean => /^readme\.md$/i.test(basename(p));
 
-/** "00_Operator_Setup" -> "Operator Setup"; "01-login" -> "login". */
+// An ordered numeric prefix is digits FOLLOWED BY a separator ("00_", "01-",
+// "2.") — not bare digits. This keeps "2fa-setup.md" a literal name rather than
+// an ordered "fa-setup" step.
+const NUMERIC_PREFIX_RE = /^\d+[-_.\s]/;
+
+/** Whether a file/folder name carries an ordered numeric prefix. */
+const hasNumericPrefix = (name: string): boolean =>
+  NUMERIC_PREFIX_RE.test(stripMdExt(basename(name)));
+
+/** "00_Operator_Setup" -> "Operator Setup"; "01-login" -> "login"; "2fa" -> "2fa". */
 function humanize(name: string): string {
-  return stripMdExt(name)
-    .replace(/^\d+[-_.\s]*/, '')
-    .replace(/[-_]+/g, ' ')
-    .trim();
+  const base = stripMdExt(name);
+  const stripped = NUMERIC_PREFIX_RE.test(base) ? base.replace(/^\d+[-_.\s]+/, '') : base;
+  return stripped.replace(/[-_]+/g, ' ').trim();
 }
 
 function slug(s: string): string {
@@ -69,6 +77,8 @@ export interface ParsedFile {
   badge?: PhaseBadge;
   /** Markdown before the first step (excludes the H1 line). */
   intro?: string;
+  /** Trailing prose/headings after the last step (e.g. a "## Troubleshooting"). */
+  trailer?: string;
   steps: ParsedStep[];
 }
 
@@ -130,10 +140,15 @@ export function parseFileSteps(markdown: string): ParsedFile {
     const fenceMatch = line.match(FENCE_RE);
     if (fenceMatch) {
       const run = fenceMatch[1];
+      // A closing fence uses the same fence char, is at least as long, and (per
+      // CommonMark) carries NO info string. Without the info-string check a line
+      // like ```bash inside an open fence would falsely close it and invert the
+      // fence state, swallowing later steps.
+      const rest = line.slice(fenceMatch[0].length).trim();
       if (!inFence) {
         inFence = true;
         fenceRun = run;
-      } else if (run[0] === fenceRun[0] && run.length >= fenceRun.length) {
+      } else if (run[0] === fenceRun[0] && run.length >= fenceRun.length && rest === '') {
         inFence = false;
       }
       pushToActive(line);
@@ -176,6 +191,10 @@ export function parseFileSteps(markdown: string): ParsedFile {
   if (mode === 'step') flushStep();
 
   result.intro = trimBlankEdges(introLines).join('\n') || undefined;
+  // Any separator content still buffered after the last step is trailing prose
+  // (e.g. a closing "## Troubleshooting"); keep it rather than dropping it.
+  const trailer = trimBlankEdges(sepLines).join('\n') || undefined;
+  if (trailer) result.trailer = trailer;
   return result;
 }
 
@@ -189,8 +208,9 @@ function groupFromParsed(parsed: ParsedFile, filePath: string): StepGroup {
   const title = parsed.title ?? humanize(basename(filePath));
 
   if (parsed.steps.length === 0) {
-    // A file with no checkboxes is itself a single step.
-    const body = parsed.intro ?? '';
+    // A file with no checkboxes is itself a single step; include any trailing
+    // content so nothing after the intro is dropped.
+    const body = [parsed.intro, parsed.trailer].filter(Boolean).join('\n\n');
     const step: Step = {
       id: `${filePath}#1-${shortHash(normText(body || title))}`,
       label: title,
@@ -205,6 +225,10 @@ function groupFromParsed(parsed: ParsedFile, filePath: string): StepGroup {
     bodyMarkdown: s.body,
     ...(s.separatorBefore ? { separatorBefore: s.separatorBefore } : {}),
   }));
+  // Attach trailing content after the last step so it renders as a closing note.
+  if (parsed.trailer && steps.length > 0) {
+    steps[steps.length - 1] = { ...steps[steps.length - 1], separatorAfter: parsed.trailer };
+  }
 
   return {
     id: slug(filePath),
@@ -222,7 +246,7 @@ function buildPhaseFromFolder(
 ): Phase {
   const readme = files.find((f) => isReadme(f.path));
   const numeric = files
-    .filter((f) => !isReadme(f.path) && /^\d/.test(basename(f.path)))
+    .filter((f) => !isReadme(f.path) && hasNumericPrefix(f.path))
     .sort((a, b) => naturalCompare(basename(a.path), basename(b.path)));
 
   let title: string | undefined;

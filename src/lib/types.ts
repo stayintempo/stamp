@@ -23,6 +23,8 @@ export interface Step {
   bodyMarkdown: string;
   /** Heading / prose that appeared immediately before this step, if any. */
   separatorBefore?: string;
+  /** Trailing prose/headings after the last step of a file, if any. */
+  separatorAfter?: string;
 }
 
 export interface StepGroup {

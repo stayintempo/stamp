@@ -70,6 +70,65 @@ describe('parseFileSteps', () => {
     const p = parseFileSteps('# T\n- [x] already ticked in the template');
     expect(p.steps).toHaveLength(1);
   });
+
+  it('does not let an info-string fence line close an open fence (M4)', () => {
+    // The inner ```bash is a closing fence with an info string in CommonMark
+    // terms only if it opens; inside an open fence it is literal content and
+    // must NOT flip the fence state and swallow step b.
+    const md = ['# T', '- [ ] a', '```', '```bash', 'echo hi', '```', '- [ ] b'].join('\n');
+    const p = parseFileSteps(md);
+    expect(p.steps.map((s) => s.label)).toEqual(['a', 'b']);
+  });
+
+  it('closes a fence on a bare same-char line of >= length (negative: no swallow)', () => {
+    const md = ['# T', '```js', 'const x = 1;', '````', '- [ ] after longer closer'].join('\n');
+    const p = parseFileSteps(md);
+    expect(p.steps.map((s) => s.label)).toEqual(['after longer closer']);
+  });
+
+  it('captures trailing prose after the last step as its separatorAfter (L1)', () => {
+    const md = ['# T', '- [ ] only step', '', '## Troubleshooting', '', 'If it breaks, reboot.'].join('\n');
+    const p = parseFileSteps(md);
+    expect(p.steps).toHaveLength(1);
+    expect(p.trailer).toContain('## Troubleshooting');
+    expect(p.trailer).toContain('reboot');
+    expect(p.steps[0].raw).not.toContain('Troubleshooting'); // not absorbed into the step raw
+  });
+
+  it('keeps trailing content in a checkbox-free whole-file step (L1)', () => {
+    const doc = buildRunDoc(src, [
+      { path: 'QA/notes.md', content: '# Notes\n\nintro para\n\n## Later\n\nmore prose' },
+    ]);
+    const step = doc.phases[0].groups[0].steps[0];
+    expect(step.bodyMarkdown).toContain('intro para');
+    expect(step.bodyMarkdown).toContain('## Later');
+    expect(step.bodyMarkdown).toContain('more prose');
+  });
+});
+
+describe('numeric prefix detection (L5)', () => {
+  it('does not humanize a non-ordered leading digit ("2fa-setup")', () => {
+    const doc = buildRunDoc(src, [{ path: 'QA/2fa-setup/README.md', content: '- [ ] enroll' }]);
+    expect(doc.phases[0].title).toBe('2fa setup');
+  });
+
+  it('still strips a real ordered prefix ("00_Operator_Setup")', () => {
+    const doc = buildRunDoc(src, [{ path: 'QA/00_Operator_Setup/README.md', content: '- [ ] x' }]);
+    expect(doc.phases[0].title).toBe('Operator Setup');
+  });
+
+  it('treats a digit-with-separator file as an ordered step group, not "2fa"', () => {
+    const doc = buildRunDoc(src, [
+      { path: 'QA/README.md', content: '# Maint' },
+      { path: 'QA/2fa-setup.md', content: '# 2fa\n- [ ] enroll a key' },
+      { path: 'QA/01-first.md', content: '# First\n- [ ] step one' },
+    ]);
+    // 2fa-setup has no ordered prefix, so only 01-first is a numeric group; the
+    // non-numeric file falls back through the README-group path.
+    const groups = doc.phases[0].groups.map((g) => g.filePath);
+    expect(groups).toContain('QA/01-first.md');
+    expect(groups).not.toContain('QA/2fa-setup.md');
+  });
 });
 
 describe('extractLabel', () => {
