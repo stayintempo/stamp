@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, fireEvent, waitFor, cleanup } from '@testing-library/preact';
+import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/preact';
 import { App, parseIssueNumber } from '../src/app';
 import { GithubClient, type IssueRef } from '../src/lib/github';
 import { formatMarker, type RunMeta } from '../src/lib/state';
@@ -183,6 +183,59 @@ describe('resumeIssue validation (H2)', () => {
     await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
     // firstPending skips the locally-passed step 1 → lands on Step 2/2.
     expect(utils.getByText(/Step 2\/2/)).toBeTruthy();
+  });
+});
+
+describe('run screen layout (phase list is on demand)', () => {
+  it('shows no phase list above the step card until the header control is used', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    // The step card is what the tester acts on: nothing but the header precedes it.
+    expect(utils.container.querySelector('.phasenav')).toBeNull();
+    const pick = utils.container.querySelector('.phase-pick') as HTMLButtonElement;
+    expect(pick).toBeTruthy();
+    expect(pick.getAttribute('aria-expanded')).toBe('false');
+    expect(pick.textContent).toContain('Phase 1/1');
+  });
+
+  it('opens the phase drawer from the header and closes it on jump', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.click(utils.container.querySelector('.phase-pick') as HTMLButtonElement);
+    expect(utils.container.querySelector('.phasenav')).toBeTruthy();
+    expect(
+      (utils.container.querySelector('.phase-pick') as HTMLButtonElement).getAttribute(
+        'aria-expanded',
+      ),
+    ).toBe('true');
+
+    // Jumping to a step dismisses the drawer and moves the run there.
+    const steps = utils.container.querySelectorAll('.phase-steps button');
+    fireEvent.click(steps[1]);
+    await waitFor(() => expect(utils.container.querySelector('.phasenav')).toBeNull());
+    expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 2/2');
+  });
+
+  it('Escape closes the drawer without changing the step', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.click(utils.container.querySelector('.phase-pick') as HTMLButtonElement);
+    expect(utils.container.querySelector('.phasenav')).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(utils.container.querySelector('.phasenav')).toBeNull());
+    expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 1/2');
+  });
+
+  it('does NOT let a verdict shortcut fire while the drawer is open', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.click(utils.container.querySelector('.phase-pick') as HTMLButtonElement);
+    fireEvent.keyDown(window, { key: 'p' });
+    // The overlay owns the keyboard: no verdict, and — the assertion that
+    // actually bites — no auto-advance off step 1. Checking the status alone
+    // would pass either way, since advancing lands on a fresh Pending card.
+    expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 1/2');
+    expect(utils.container.querySelector('.stepcard .statusline')?.textContent).toContain('Pending');
   });
 });
 

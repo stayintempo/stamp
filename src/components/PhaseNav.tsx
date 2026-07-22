@@ -11,11 +11,23 @@ interface Props {
   onJump: (globalIndex: number) => void;
 }
 
+/** The phase holding a global step index, so the nav opens where you are. */
+function phaseIdAt(doc: RunDoc, globalIndex: number): string | null {
+  let seen = 0;
+  for (const phase of doc.phases) {
+    seen += phase.groups.reduce((n, g) => n + g.steps.length, 0);
+    if (globalIndex < seen) return phase.id;
+  }
+  return null;
+}
+
 /** Accordion of phases; expanding a phase lists its steps for direct jumps. */
 export function PhaseNav({ doc, state, currentIndex, onJump }: Props) {
   const summary = summarize(doc, state);
   const byId = new Map<string, PhaseSummary>(summary.phases.map((p) => [p.id, p]));
-  const [open, setOpen] = useState<string | null>(null);
+  // Start on the current phase: the nav is opened on demand from the header, so
+  // landing collapsed would cost a click to get back to where you already are.
+  const [open, setOpen] = useState<string | null>(phaseIdAt(doc, currentIndex));
 
   // Precompute the global step index at the start of each phase.
   let running = 0;

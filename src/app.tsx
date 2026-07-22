@@ -34,7 +34,7 @@ import { Markdown } from './components/Markdown';
 import { SetupScreen } from './components/SetupScreen';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { RunHeader, type SyncStatus } from './components/RunHeader';
-import { PhaseNav } from './components/PhaseNav';
+import { PhaseDrawer } from './components/PhaseDrawer';
 import { StepCard } from './components/StepCard';
 import { FinishView } from './components/FinishView';
 import { Footer } from './components/Footer';
@@ -95,6 +95,7 @@ export function App({ createClient }: AppProps = {}) {
   const [posted, setPosted] = useState(false);
   const [postError, setPostError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [phasesOpen, setPhasesOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncNotice, setSyncNotice] = useState(0);
   const [shaMismatch, setShaMismatch] = useState<IssueRef | null>(null);
@@ -517,6 +518,13 @@ export function App({ createClient }: AppProps = {}) {
         issueUrl={issue?.htmlUrl}
         syncStatus={localOnly ? undefined : syncStatus}
         syncNotice={syncNotice}
+        phase={
+          current
+            ? { number: current.phaseNumber, count: doc.phases.length, title: current.phase.title }
+            : undefined
+        }
+        phasesOpen={phasesOpen}
+        onOpenPhases={() => setPhasesOpen(true)}
         onRetrySync={retrySync}
         onSettings={() => setSettingsOpen(true)}
         onFinish={() => setView('finish')}
@@ -535,10 +543,10 @@ export function App({ createClient }: AppProps = {}) {
           </button>
         </div>
       )}
-      <PhaseNav doc={doc} state={runState} currentIndex={currentIndex} onJump={setCurrentIndex} />
       {current && linkCtx && (
         <StepCard
           key={current.step.id}
+          suppressKeys={settingsOpen || phasesOpen}
           phase={current.phase}
           step={current.step}
           positionText={`Phase ${current.phaseNumber} · Step ${current.stepInPhase}/${current.phaseTotal}`}
@@ -560,6 +568,15 @@ export function App({ createClient }: AppProps = {}) {
           onFailResolved={advance}
           onBack={() => setCurrentIndex((i) => Math.max(0, i - 1))}
           onNext={() => setCurrentIndex((i) => Math.min(nav.length - 1, i + 1))}
+        />
+      )}
+      {phasesOpen && (
+        <PhaseDrawer
+          doc={doc}
+          state={runState}
+          currentIndex={currentIndex}
+          onJump={setCurrentIndex}
+          onClose={() => setPhasesOpen(false)}
         />
       )}
       {settingsOpen && (

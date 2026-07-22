@@ -21,6 +21,8 @@ interface Props {
   groupIntro?: string;
   hasBack: boolean;
   hasNext: boolean;
+  /** Set while an overlay owns the screen, so p/f/s can't leak a verdict past it. */
+  suppressKeys?: boolean;
   onVerdict: (status: StepStatus) => void;
   onNote: (note: string) => void;
   /** Called after the fail note dialog closes, to auto-advance. */
@@ -55,12 +57,13 @@ export function StepCard(props: Props) {
   // `key`), so `f` routes through the same verdict path as the button — opening
   // the note dialog (H3). All shortcuts are suppressed while the dialog is open
   // (dialog-open state, not tag sniffing) so focus on a dialog button can't leak
-  // a verdict (L3). A per-instance guard blocks a rapid second verdict keypress
-  // from re-marking after the card has already acted (L8).
+  // a verdict (L3), and likewise while `suppressKeys` says an overlay is up. A
+  // per-instance guard blocks a rapid second verdict keypress from re-marking
+  // after the card has already acted (L8).
   const acted = useRef(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (dialogOpen) return;
+      if (dialogOpen || props.suppressKeys) return;
       const action = resolveKeyAction(e, e.target as HTMLElement | null);
       if (!action) return;
       switch (action) {
@@ -82,7 +85,7 @@ export function StepCard(props: Props) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dialogOpen]);
+  }, [dialogOpen, props.suppressKeys]);
 
   const copyScreenshotRef = async () => {
     const ref = screenshotReference(phase.title, step);

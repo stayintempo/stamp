@@ -55,7 +55,7 @@ describe('StepCard', () => {
     const { container } = renderStep();
     const link = container.querySelector('.body a[href="https://machine.local/panel"]') as HTMLAnchorElement;
     expect(link.getAttribute('target')).toBe('qa-app');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('referrerpolicy')).toBe('no-referrer');
   });
 
   it('fires onVerdict with the chosen status', () => {
@@ -203,14 +203,31 @@ describe('PhaseNav', () => {
     let state = emptyState();
     state = setStep(state, flat[0].step.id, { status: 'pass' });
     state = setStep(state, flat[1].step.id, { status: 'fail' });
-    const { getByText, container } = render(
+    const { container } = render(
       <PhaseNav doc={doc} state={state} currentIndex={0} onJump={vi.fn()} />,
     );
-    // expand the first phase
-    fireEvent.click(getByText('1. Brewing'));
+    // The phase holding currentIndex starts expanded, so no click is needed.
     const dots = container.querySelectorAll('.phase-steps .dot');
     expect(dots[0].classList.contains('pass')).toBe(true);
     expect(dots[1].classList.contains('fail')).toBe(true);
+  });
+
+  it('opens on the phase holding currentIndex, not the first phase', () => {
+    // currentIndex sits in phase 2; phase 1's steps must NOT be listed.
+    const inPhase2 = flat.findIndex((n) => n.phase.id !== flat[0].phase.id);
+    expect(inPhase2).toBeGreaterThan(0);
+    const { container, getByText } = render(
+      <PhaseNav doc={doc} state={emptyState()} currentIndex={inPhase2} onJump={vi.fn()} />,
+    );
+    const labels = Array.from(container.querySelectorAll('.phase-steps .lbl')).map(
+      (el) => el.textContent,
+    );
+    expect(labels).toContain(flat[inPhase2].step.label);
+    expect(labels).not.toContain(flat[0].step.label);
+
+    // Clicking the already-open phase collapses it.
+    fireEvent.click(getByText('2. Cleaning'));
+    expect(container.querySelectorAll('.phase-steps .lbl').length).toBe(0);
   });
 
   it('calls onJump with the global index when a step is clicked', () => {

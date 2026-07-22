@@ -12,6 +12,10 @@ interface Props {
   syncStatus?: SyncStatus;
   /** Count of doc steps not reflected in the issue body (hand-deleted lines). */
   syncNotice?: number;
+  /** Where the run currently is; absent only if the doc has no steps. */
+  phase?: { number: number; count: number; title: string };
+  phasesOpen: boolean;
+  onOpenPhases: () => void;
   onRetrySync?: () => void;
   onSettings: () => void;
   onFinish: () => void;
@@ -56,6 +60,9 @@ export function RunHeader({
   issueUrl,
   syncStatus,
   syncNotice,
+  phase,
+  phasesOpen,
+  onOpenPhases,
   onRetrySync,
   onSettings,
   onFinish,
@@ -73,13 +80,30 @@ export function RunHeader({
       </div>
       <ProgressBar counts={summary.totals} />
       <CountsRow counts={summary.totals} />
+      {phase && (
+        <button
+          class="phase-pick"
+          onClick={onOpenPhases}
+          aria-haspopup="dialog"
+          aria-expanded={phasesOpen}
+          title="Jump to another phase or step"
+        >
+          <span class="pp-pos">
+            Phase {phase.number}/{phase.count}
+          </span>
+          <span class="pp-title">{phase.title}</span>
+          <span class="pp-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+      )}
       <div class="row" style={{ justifyContent: 'space-between' }}>
         <div class="row" style={{ gap: '10px' }}>
           <button onClick={onSettings} title="Change settings" aria-label="Change settings">
             ⚙︎
           </button>
           {issueUrl && (
-            <a href={issueUrl} target="qa-docs" rel="noopener noreferrer" class="muted" style={{ fontSize: '12.5px' }}>
+            <a href={issueUrl} target="qa-docs" referrerpolicy="no-referrer" class="muted" style={{ fontSize: '12.5px' }}>
               issue ↗
             </a>
           )}
