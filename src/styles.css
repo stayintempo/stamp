@@ -362,8 +362,11 @@ a {
   gap: 8px;
   align-items: center;
 }
+/* Separator prose: headings between steps, plus whatever prose follows them.
+ * It can run to many paragraphs with tables and code, so this only marks the
+ * block as untracked context — the blanket bold it used to carry made whole
+ * sections unreadable. Headings inside style themselves via `.body`. */
 .sep {
-  font-weight: 700;
   color: var(--ink-2);
   border-left: 3px solid var(--line);
   padding-left: 8px;
