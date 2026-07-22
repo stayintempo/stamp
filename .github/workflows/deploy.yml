@@ -3,36 +3,97 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
-# Least privilege: read the repo, publish Pages, mint the OIDC token deploy-pages needs.
+# Least privilege: read the repo (incl. releases), publish Pages, mint the OIDC
+# token deploy-pages needs.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Never cancel an in-flight production deploy; queue instead.
+# One Pages deploy at a time. Each deploy rebuilds BOTH channels and replaces the
+# whole site, so superseded runs can be cancelled.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      # Staging always builds from main, regardless of which event triggered us
+      # (a release event would otherwise check out the tag).
+      - name: Checkout main (staging source)
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
+
+      # Prod builds from the latest published release tag. No release yet -> empty,
+      # and prod falls back to main. gh reads the repo from the checkout context.
+      - name: Resolve latest release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PROD_REF="$(gh release view --json tagName -q .tagName 2>/dev/null || true)"
+          echo "PROD_REF=$PROD_REF" >> "$GITHUB_ENV"
+          if [ -n "$PROD_REF" ]; then
+            echo "Prod source: release tag $PROD_REF"
+          else
+            echo "Prod source: main (no release published yet)"
+          fi
+
+      - name: Build staging (from main)
+        env:
+          STAMP_CHANNEL: staging
+        run: npm run build -- --outDir dist-staging
+
+      # Only when a release exists: check the tag out into a separate path.
+      # ref is an action input (not shell), so no untrusted value reaches a script.
+      - name: Checkout release tag (prod source)
+        if: env.PROD_REF != ''
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.PROD_REF }}
+          path: prod-src
+          fetch-depth: 0
+
+      - name: Build prod
+        env:
+          STAMP_CHANNEL: prod
+        run: |
+          if [ -n "$PROD_REF" ]; then
+            # The tag may predate STAMP_CHANNEL; its own vite config just ignores it.
+            ( cd prod-src && npm ci && npm run build )
+            echo "PROD_DIST=prod-src/dist" >> "$GITHUB_ENV"
+          else
+            npm run build -- --outDir dist-prod
+            echo "PROD_DIST=dist-prod" >> "$GITHUB_ENV"
+          fi
+
+      - name: Assemble site (prod at root, staging under /staging)
+        run: |
+          rm -rf site
+          mkdir -p site/staging
+          cp -r "$PROD_DIST"/. site/
+          cp -r dist-staging/. site/staging/
+
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: dist
+          path: site
 
   deploy:
     needs: build
