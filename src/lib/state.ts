@@ -7,8 +7,11 @@
 //   applyStateToBody    - merge local state onto an existing body (the PATCH path,
 //                         preserving foreign lines and hand-edited labels)
 //   parseIssueBody      - read state back out of a body (resume)
-// Steps are aligned to the doc by POSITION (the Nth top-level task line == the
-// Nth step in run order), so hand-renamed labels still map and never crash.
+// Steps are aligned to the doc by LABEL text (the k-th line with a given label
+// maps to the k-th step with that label), skipping fenced regions. Foreign task
+// lines a human inserted, and hand-renamed labels, stay untouched rather than
+// being clobbered by a position that shifted; steps with no matching line are
+// surfaced as "unrepresented" (countUnrepresentedSteps), never crash.
 
 import type { RunDoc, Step } from './types';
 import { flattenSteps } from './parse';
@@ -37,6 +40,11 @@ export const STAMP_MARKER = 'stamp:v1';
 
 const NOTE_BULLET_RE = /^\s+-\s+(?:📝|❌\s*FAIL:|⏭\s*skipped)/u;
 const TASK_LINE_RE = /^- \[([ xX])\] (.*)$/;
+const FENCE_RE = /^\s*(`{3,}|~{3,})/;
+
+/** Normalize CRLF/CR to LF. GitHub web-UI edits store CRLF; without this the
+ *  `$`-anchored task/note regexes never match and sync silently no-ops. */
+const toLF = (s: string): string => s.replace(/\r\n?/g, '\n');
 
 export const emptyState = (): RunState => ({ statuses: {} });
 
@@ -94,33 +102,93 @@ export function serializeIssueBody(doc: RunDoc, state: RunState, meta: RunMeta):
   return out.join('\n').trimEnd() + '\n';
 }
 
+interface BodyTask {
+  lineIndex: number;
+  checked: boolean;
+  label: string;
+}
+
+/** Scan top-level task lines, skipping fenced code regions so a `- [ ]` inside
+ *  a fence is never treated as a tracked task. */
+function scanBodyTasks(lines: string[]): BodyTask[] {
+  const tasks: BodyTask[] = [];
+  let inFence = false;
+  let fenceRun = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const fm = line.match(FENCE_RE);
+    if (fm) {
+      const run = fm[1];
+      const rest = line.slice(fm[0].length).trim();
+      if (!inFence) {
+        inFence = true;
+        fenceRun = run;
+      } else if (run[0] === fenceRun[0] && run.length >= fenceRun.length && rest === '') {
+        inFence = false;
+      }
+      continue;
+    }
+    if (inFence) continue;
+    const m = line.match(TASK_LINE_RE);
+    if (m) tasks.push({ lineIndex: i, checked: m[1].toLowerCase() === 'x', label: m[2].trim() });
+  }
+  return tasks;
+}
+
 /**
- * Merge local state onto an existing body. Rewrites each step's checkbox and
- * note bullets in place (keyed by position) and preserves everything else —
- * foreign lines, prose, and hand-edited step labels.
+ * Anchor doc steps to body task lines by EXACT label text. Among duplicate
+ * labels the k-th doc step maps to the k-th body line with that label (ordinal
+ * disambiguation; position is only a tiebreak within a label). Body lines with
+ * no matching doc label stay foreign/untouched; doc steps with no matching line
+ * stay unrepresented. Returns the line-index → step map and the matched-step set.
+ */
+function matchStepsToTasks(
+  flat: Array<{ step: Step }>,
+  tasks: BodyTask[],
+): { taskToStep: Map<number, { step: Step }>; matchedSteps: Set<number> } {
+  const byLabel = new Map<string, BodyTask[]>();
+  for (const t of tasks) {
+    const list = byLabel.get(t.label);
+    if (list) list.push(t);
+    else byLabel.set(t.label, [t]);
+  }
+  const cursor = new Map<string, number>();
+  const taskToStep = new Map<number, { step: Step }>();
+  const matchedSteps = new Set<number>();
+  flat.forEach((entry, si) => {
+    const list = byLabel.get(entry.step.label.trim());
+    if (!list) return;
+    const k = cursor.get(entry.step.label.trim()) ?? 0;
+    if (k < list.length) {
+      taskToStep.set(list[k].lineIndex, entry);
+      cursor.set(entry.step.label.trim(), k + 1);
+      matchedSteps.add(si);
+    }
+  });
+  return { taskToStep, matchedSteps };
+}
+
+/**
+ * Merge local state onto an existing body. Rewrites the checkbox + note bullets
+ * of each label-matched step in place and preserves everything else — foreign
+ * task lines and their sub-bullets, prose, comments, and fenced regions.
  */
 export function applyStateToBody(existingBody: string, doc: RunDoc, state: RunState): string {
   const flat = flattenSteps(doc);
-  const lines = existingBody.split('\n');
+  const lines = toLF(existingBody).split('\n');
+  const tasks = scanBodyTasks(lines);
+  const { taskToStep } = matchStepsToTasks(flat, tasks);
   const out: string[] = [];
-  let taskIndex = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(TASK_LINE_RE);
-    if (!m) {
-      out.push(lines[i]);
-      continue;
-    }
-    const entry = flat[taskIndex];
-    taskIndex++;
+    const entry = taskToStep.get(i);
     if (!entry) {
-      // Extra task line beyond the doc — leave it untouched.
       out.push(lines[i]);
       continue;
     }
-    const label = m[2];
+    const label = lines[i].match(TASK_LINE_RE)![2];
     out.push(...renderStepLines(label, stepState(state, entry.step.id)));
-    // Drop the old note bullets that belonged to this step.
+    // Drop the old note bullets that belonged to this matched step only.
     let j = i + 1;
     while (j < lines.length && NOTE_BULLET_RE.test(lines[j])) j++;
     i = j - 1;
@@ -128,30 +196,28 @@ export function applyStateToBody(existingBody: string, doc: RunDoc, state: RunSt
   return out.join('\n');
 }
 
-/** Read run state back out of an issue body, aligned by position to the doc. */
+/** Read run state back out of an issue body, aligned by label to the doc. */
 export function parseIssueBody(body: string, doc: RunDoc): RunState {
   const flat = flattenSteps(doc);
-  const lines = body.split('\n');
+  const lines = toLF(body).split('\n');
+  const tasks = scanBodyTasks(lines);
+  const { taskToStep } = matchStepsToTasks(flat, tasks);
   const statuses: Record<string, StepState> = {};
-  let taskIndex = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(TASK_LINE_RE);
-    if (!m) continue;
-    const entry = flat[taskIndex];
-    taskIndex++;
+  for (const t of tasks) {
+    const entry = taskToStep.get(t.lineIndex);
     if (!entry) continue;
 
-    const checked = m[1].toLowerCase() === 'x';
-    let status: StepStatus = checked ? 'pass' : 'pending';
+    let status: StepStatus = t.checked ? 'pass' : 'pending';
     let note: string | undefined;
 
     // Inspect the immediately-following note bullets.
-    let j = i + 1;
+    let j = t.lineIndex + 1;
     while (j < lines.length && NOTE_BULLET_RE.test(lines[j])) {
       const nl = lines[j].trim();
       const fail = nl.match(/^-\s+❌\s*FAIL:\s*(.*)$/u);
-      const skip = nl.match(/^-\s+⏭\s*skipped(?:\s*—\s*(.*))?$/u);
+      // Tolerate an em dash OR a hyphen after "skipped" (L7).
+      const skip = nl.match(/^-\s+⏭\s*skipped(?:\s*[—-]\s*(.*))?$/u);
       const plain = nl.match(/^-\s+📝\s*(.*)$/u);
       if (fail) {
         status = 'fail';
@@ -169,6 +235,14 @@ export function parseIssueBody(body: string, doc: RunDoc): RunState {
   }
 
   return { statuses };
+}
+
+/** How many doc steps have no matching task line in the body (for the sync notice). */
+export function countUnrepresentedSteps(body: string, doc: RunDoc): number {
+  const flat = flattenSteps(doc);
+  const tasks = scanBodyTasks(toLF(body).split('\n'));
+  const { matchedSteps } = matchStepsToTasks(flat, tasks);
+  return flat.length - matchedSteps.size;
 }
 
 /** Extract the metadata block if the body carries the STAMP marker. */
@@ -255,6 +329,22 @@ export interface Settings {
 const SETTINGS_KEY = 'stamp:settings';
 const runKey = (docUrl: string, sha: string, issueNumber: number | null): string =>
   `stamp:run:${docUrl}#${sha}#${issueNumber ?? 'local'}`;
+
+/**
+ * One canonical identity string for a doc, independent of how the tester typed
+ * the URL. `owner/repo/QA` and its tree URL collapse to the same value so they
+ * share localStorage state and match the same marker (owner/repo lowercased —
+ * GitHub is case-insensitive there; path kept verbatim). Excludes ref/sha: the
+ * SHA is tracked separately as the revision pin.
+ */
+export function canonicalDocUrl(source: {
+  owner: string;
+  repo: string;
+  path: string;
+}): string {
+  const path = source.path.replace(/^\/+|\/+$/g, '');
+  return `${source.owner.toLowerCase()}/${source.repo.toLowerCase()}${path ? `/${path}` : ''}`;
+}
 
 function safeStorage(): Storage | undefined {
   try {

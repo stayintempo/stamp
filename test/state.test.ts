@@ -4,6 +4,8 @@ import {
   serializeIssueBody,
   parseIssueBody,
   applyStateToBody,
+  countUnrepresentedSteps,
+  canonicalDocUrl,
   parseMarker,
   hasStampMarker,
   setStep,
@@ -104,12 +106,59 @@ describe('applyStateToBody (merge onto existing body)', () => {
     expect(merged).toMatch(/- \[x\] Power on\./);
   });
 
-  it('preserves a hand-edited step label while updating its checkbox', () => {
+  it('leaves a hand-renamed label untouched (label-anchored: it is now foreign)', () => {
     let body = serializeIssueBody(doc, emptyState(), meta);
     body = body.replace('- [ ] Power on.', '- [ ] Power on (renamed by hand)');
     const s = stateWith({ 0: { status: 'pass' } });
     const merged = applyStateToBody(body, doc, s);
-    expect(merged).toContain('- [x] Power on (renamed by hand)');
+    // The renamed line no longer matches the doc label, so it is preserved
+    // verbatim rather than being clobbered by a shifted position.
+    expect(merged).toContain('- [ ] Power on (renamed by hand)');
+    expect(merged).not.toContain('- [x] Power on (renamed by hand)');
+  });
+
+  it('maps by label even when a foreign task line is inserted above (M3)', () => {
+    let body = serializeIssueBody(doc, emptyState(), meta);
+    // A human inserts their own checkbox before the first real step.
+    body = body.replace('- [ ] Power on.', '- [ ] my own side task\n- [ ] Power on.');
+    const s = stateWith({ 0: { status: 'pass' } });
+    const merged = applyStateToBody(body, doc, s);
+    // Positional merge would have checked the foreign line; label matching checks
+    // the real step and leaves the foreign line pending.
+    expect(merged).toContain('- [ ] my own side task');
+    expect(merged).toMatch(/- \[x\] Power on\./);
+  });
+
+  it('does not treat a fenced `- [ ] in the body as a task line (M3)', () => {
+    let body = serializeIssueBody(doc, emptyState(), meta);
+    body = body.replace(
+      '## 1. Brewing [BLOCKING]',
+      '## 1. Brewing [BLOCKING]\n\n```\n- [x] fenced example, not a real step\n```',
+    );
+    const s = stateWith({ 0: { status: 'pass' } });
+    const merged = applyStateToBody(body, doc, s);
+    // The fenced checkbox is preserved as-is and never consumed as step 0.
+    expect(merged).toContain('- [x] fenced example, not a real step');
+    expect(merged).toMatch(/- \[x\] Power on\./);
+    // round-trips: the fenced line does not become tracked state
+    const flat = flattenSteps(doc);
+    const parsed = parseIssueBody(merged, doc);
+    expect(parsed.statuses[flat[0].step.id]?.status).toBe('pass');
+  });
+
+  it('disambiguates duplicate labels by ordinal, positional as tiebreak (M3)', () => {
+    const dupDoc = buildRunDoc(source, [
+      { path: 'QA/dup.md', content: '# Dup\n- [ ] same\n- [ ] same' },
+    ]);
+    const dupFlat = flattenSteps(dupDoc);
+    const dupMeta: RunMeta = { ...meta, path: 'QA/dup.md' };
+    let s = emptyState();
+    s = setStep(s, dupFlat[0].step.id, { status: 'pass' });
+    s = setStep(s, dupFlat[1].step.id, { status: 'fail', note: 'second one broke' });
+    const body = serializeIssueBody(dupDoc, s, dupMeta);
+    const parsed = parseIssueBody(body, dupDoc);
+    expect(parsed.statuses[dupFlat[0].step.id]?.status).toBe('pass');
+    expect(parsed.statuses[dupFlat[1].step.id]).toEqual({ status: 'fail', note: 'second one broke' });
   });
 
   it('does not accumulate duplicate note bullets across repeated merges', () => {
@@ -130,12 +179,95 @@ describe('applyStateToBody (merge onto existing body)', () => {
       '- [ ] another line',
     ].join('\n');
     expect(() => parseIssueBody(weird, doc)).not.toThrow();
-    // positional mapping: first task line -> first step, marked checked -> pass
+    // label-anchored: none of these lines match a doc label, so nothing is
+    // mapped (negative assertion — foreign lines do NOT become step state).
     const flat = flattenSteps(doc);
     const parsed = parseIssueBody(weird, doc);
-    expect(parsed.statuses[flat[0].step.id]?.status).toBe('pass');
+    expect(parsed.statuses[flat[0].step.id]).toBeUndefined();
+    expect(Object.keys(parsed.statuses)).toHaveLength(0);
   });
 });
+
+describe('CRLF issue bodies (H1)', () => {
+  it('applyStateToBody updates a CRLF body instead of silently no-oping', () => {
+    const lf = serializeIssueBody(doc, emptyState(), meta);
+    const crlf = lf.replace(/\n/g, '\r\n');
+    const s = stateWith({ 0: { status: 'pass' } });
+    const merged = applyStateToBody(crlf, doc, s);
+    expect(merged).toMatch(/- \[x\] Power on\./);
+  });
+
+  it('parseIssueBody reads state out of a CRLF body (round-trip)', () => {
+    const s = stateWith({
+      0: { status: 'pass' },
+      1: { status: 'fail', note: 'thin crema' },
+      2: { status: 'skip' },
+    });
+    const crlf = serializeIssueBody(doc, s, meta).replace(/\n/g, '\r\n');
+    expect(parseIssueBody(crlf, doc)).toEqual(s);
+  });
+
+  it('serialize -> CRLF -> apply -> parse round-trips cleanly', () => {
+    const s = stateWith({ 0: { status: 'fail', note: 'boom' }, 3: { status: 'skip' } });
+    let body = serializeIssueBody(doc, emptyState(), meta).replace(/\n/g, '\r\n');
+    body = applyStateToBody(body, doc, s);
+    expect(parseIssueBody(body, doc)).toEqual(s);
+  });
+});
+
+describe('tolerant skip-note parsing (L7)', () => {
+  it('parses a skip note written with a plain hyphen, not an em dash', () => {
+    const flat = flattenSteps(doc);
+    const body = [
+      formatMarkerLine(),
+      '## 1. Brewing [BLOCKING]',
+      '- [ ] Power on.',
+      '  - ⏭ skipped - no power today',
+    ].join('\n');
+    const parsed = parseIssueBody(body, doc);
+    expect(parsed.statuses[flat[0].step.id]).toEqual({ status: 'skip', note: 'no power today' });
+  });
+});
+
+describe('countUnrepresentedSteps (M3 notice)', () => {
+  it('is zero for a freshly serialized body', () => {
+    const body = serializeIssueBody(doc, emptyState(), meta);
+    expect(countUnrepresentedSteps(body, doc)).toBe(0);
+  });
+
+  it('counts steps whose task line a human deleted from the body', () => {
+    let body = serializeIssueBody(doc, emptyState(), meta);
+    // Remove the "Power on." step line entirely.
+    body = body
+      .split('\n')
+      .filter((l) => !l.includes('Power on.'))
+      .join('\n');
+    expect(countUnrepresentedSteps(body, doc)).toBe(1);
+  });
+});
+
+describe('canonicalDocUrl (L4)', () => {
+  it('collapses a tree URL and a bare owner/repo/path to the same identity', () => {
+    const a = canonicalDocUrl({ owner: 'Acme', repo: 'Coffee-QA', path: 'QA' });
+    const b = canonicalDocUrl({ owner: 'acme', repo: 'coffee-qa', path: '/QA/' });
+    expect(a).toBe(b);
+    expect(a).toBe('acme/coffee-qa/QA');
+  });
+
+  it('distinguishes different paths (negative)', () => {
+    expect(canonicalDocUrl({ owner: 'a', repo: 'b', path: 'QA' })).not.toBe(
+      canonicalDocUrl({ owner: 'a', repo: 'b', path: 'QB' }),
+    );
+  });
+
+  it('handles the repo root (empty path)', () => {
+    expect(canonicalDocUrl({ owner: 'a', repo: 'b', path: '' })).toBe('a/b');
+  });
+});
+
+function formatMarkerLine(): string {
+  return `<!-- stamp:v1 {"docUrl":"acme/coffee-qa/QA","sha":"${source.sha}","path":"QA","tool":"stamp@0.1.0"} -->`;
+}
 
 describe('summarize', () => {
   it('counts per-phase totals and flags blocking failures', () => {
