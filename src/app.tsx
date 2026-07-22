@@ -140,7 +140,10 @@ export function App() {
       // Suggest an app host from the doc if the field was left blank.
       if (!s.appHost) {
         const all = loaded.phases
-          .flatMap((p) => [p.intro ?? '', ...p.groups.flatMap((g) => g.steps.map((st) => st.bodyMarkdown))])
+          .flatMap((p) => [
+            p.intro ?? '',
+            ...p.groups.flatMap((g) => [g.intro ?? '', ...g.steps.map((st) => st.bodyMarkdown)]),
+          ])
           .join('\n');
         const guess = suggestAppHost((loaded.preamble ?? '') + '\n' + all);
         if (guess) {
@@ -345,6 +348,10 @@ export function App() {
           note={stepState(runState, current.step.id).note}
           linkCtx={linkCtx}
           issueUrl={issue?.htmlUrl}
+          phaseIntro={current.stepInPhase === 1 ? current.phase.intro : undefined}
+          groupIntro={
+            current.group.steps[0]?.id === current.step.id ? current.group.intro : undefined
+          }
           hasBack={currentIndex > 0}
           hasNext={currentIndex < nav.length - 1}
           onVerdict={(s) => {

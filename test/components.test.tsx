@@ -127,6 +127,24 @@ describe('StepCard', () => {
     expect(onVerdict).toHaveBeenCalledTimes(1);
   });
 
+  it('renders phase and group intros when provided (M5)', () => {
+    const { container, getByText } = renderStep({
+      phaseIntro: 'Warm up the machine before this phase.',
+      groupIntro: 'These steps all touch the **grinder**.',
+    });
+    expect(getByText('Phase notes')).toBeTruthy();
+    expect(getByText('Section notes')).toBeTruthy();
+    const details = Array.from(container.querySelectorAll('details.intro'));
+    expect(details).toHaveLength(2);
+    // intro markdown is rendered (bold span present)
+    expect(container.querySelector('details.intro strong')?.textContent).toContain('grinder');
+  });
+
+  it('omits intro sections when not provided (negative)', () => {
+    const { container } = renderStep();
+    expect(container.querySelector('details.intro')).toBeNull();
+  });
+
   it('cancelling the dialog after a keyboard fail keeps the fail and advances', () => {
     const { container, onVerdict, onFailResolved } = renderStep();
     fireEvent.keyDown(window, { key: 'f' });

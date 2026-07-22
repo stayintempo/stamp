@@ -466,6 +466,22 @@ details.preamble summary {
   font-size: 13.5px;
 }
 
+/* ---- phase / group intro (shown on step entry) ---- */
+
+details.intro {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--surface-2, transparent);
+}
+details.intro summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 /* ---- footer ---- */
 
 .appfoot {

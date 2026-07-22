@@ -15,6 +15,10 @@ interface Props {
   note?: string;
   linkCtx: LinkContext;
   issueUrl?: string;
+  /** Phase intro prose, shown on the first step of a phase. */
+  phaseIntro?: string;
+  /** Group (per-file) intro prose, shown on the first step of a group. */
+  groupIntro?: string;
   hasBack: boolean;
   hasNext: boolean;
   onVerdict: (status: StepStatus) => void;
@@ -101,6 +105,19 @@ export function StepCard(props: Props) {
         )}
         <span class={`statusline ${status}`}>{statusText(status)}</span>
       </div>
+
+      {props.phaseIntro && (
+        <details class="intro" open>
+          <summary>Phase notes</summary>
+          <Markdown markdown={props.phaseIntro} ctx={linkCtx} />
+        </details>
+      )}
+      {props.groupIntro && (
+        <details class="intro" open>
+          <summary>Section notes</summary>
+          <Markdown markdown={props.groupIntro} ctx={linkCtx} />
+        </details>
+      )}
 
       {step.separatorBefore && <Markdown markdown={step.separatorBefore} ctx={linkCtx} class="sep" />}
 
