@@ -76,11 +76,20 @@ async function connect(utils: ReturnType<typeof renderApp>, url = 'o/r/QA') {
   await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
 }
 
+/**
+ * Preact defers useEffect past the waitFor that a DOM assertion resolves on, so
+ * window listeners an effect registers (the run keyboard handler, beforeunload)
+ * are not attached yet when the step card first appears. Pump real time so the
+ * scheduled flush lands before a test probes for them.
+ */
+const flushEffects = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
 /** Connect and start a brand-new issue-backed run; resolve at the run view. */
 async function startRun(utils: ReturnType<typeof renderApp>) {
   await connect(utils);
   fireEvent.click(utils.getByText(/Start a new run/));
   await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+  await flushEffects();
 }
 
 beforeEach(() => localStorage.clear());
@@ -226,27 +235,104 @@ describe('run screen layout (phase list is on demand)', () => {
     expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 1/2');
   });
 
-  it('does NOT let a verdict shortcut fire while the drawer is open', async () => {
+});
+
+describe('run keyboard shortcuts', () => {
+  const pos = (u: ReturnType<typeof renderApp>) =>
+    u.container.querySelector('.stepcard .pos')?.textContent ?? '';
+  const status = (u: ReturnType<typeof renderApp>) =>
+    u.container.querySelector('.stepcard .statusline')?.textContent ?? '';
+
+  it('marks pass and advances', async () => {
     const utils = renderApp();
     await startRun(utils);
-    fireEvent.click(utils.container.querySelector('.phase-pick') as HTMLButtonElement);
     fireEvent.keyDown(window, { key: 'p' });
-    // The overlay owns the keyboard: no verdict, and — the assertion that
-    // actually bites — no auto-advance off step 1. Checking the status alone
-    // would pass either way, since advancing lands on a fresh Pending card.
-    expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 1/2');
-    expect(utils.container.querySelector('.stepcard .statusline')?.textContent).toContain('Pending');
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
   });
+
+  it('marks fail and opens the note editor instead of advancing', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'f' });
+    await waitFor(() => expect(utils.container.querySelector('dialog textarea')).toBeTruthy());
+    expect(pos(utils)).toContain('Step 1/2');
+    expect(status(utils)).toContain('Failed');
+  });
+
+  it('arrow keys move without marking', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    expect(status(utils)).toContain('Pending');
+  });
+
+  it('guards a second verdict keypress in the same frame (L8)', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    // Raw dispatch, NOT fireEvent: fireEvent wraps each call in act and flushes
+    // effects, which would rebind the listener to the next step in between and
+    // make the two presses legitimately land on different steps. Dispatching
+    // directly is the real scenario — two keypresses before a single re-render.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
+    await flushEffects();
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    // The 'f' was swallowed: step one is still passed, not failed.
+    expect(status(utils)).toContain('Passed');
+  });
+
+  it('re-arms the guard when you step back to a step', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'p' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    expect(status(utils)).toContain('Passed');
+    // Arriving at a step clears the guard, so the verdict can be changed. The
+    // new verdict advances, so read it back after stepping in again.
+    fireEvent.keyDown(window, { key: 's' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    expect(status(utils)).toContain('Skipped');
+  });
+
+  // One modalOpen flag gates one listener, so every overlay is covered by
+  // construction. The settings case was broken before that consolidation.
+  const overlays: Array<[string, (u: ReturnType<typeof renderApp>) => void]> = [
+    ['the phase drawer', (u) => fireEvent.click(u.container.querySelector('.phase-pick')!)],
+    ['the settings overlay', (u) => fireEvent.click(u.getByText('⚙︎'))],
+    ['the note editor', () => fireEvent.keyDown(window, { key: 'f' })],
+  ];
+
+  for (const [name, open] of overlays) {
+    it(`does NOT let a verdict shortcut fire through ${name}`, async () => {
+      const utils = renderApp();
+      await startRun(utils);
+      if (name === 'the note editor') {
+        // Fail first, then confirm further shortcuts cannot change that verdict.
+        open(utils);
+        await waitFor(() => expect(status(utils)).toContain('Failed'));
+        fireEvent.keyDown(window, { key: 'p' });
+        expect(pos(utils)).toContain('Step 1/2');
+        expect(status(utils)).toContain('Failed');
+        return;
+      }
+      open(utils);
+      fireEvent.keyDown(window, { key: 'p' });
+      expect(pos(utils)).toContain('Step 1/2');
+      expect(status(utils)).toContain('Pending');
+    });
+  }
 });
 
 describe('run window guard (beforeunload)', () => {
-  /**
-   * Preact defers useEffect past a waitFor DOM assertion, so an effect keyed on
-   * the view change to 'run' is not attached yet when startRun resolves. Pump
-   * real time so the scheduled flush lands before we probe for the listener.
-   */
-  const flushEffects = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
-
   /** Dispatch a cancelable beforeunload and report whether something blocked it. */
   function fireBeforeUnload(): boolean {
     const e = new Event('beforeunload', { cancelable: true });
