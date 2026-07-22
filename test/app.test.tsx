@@ -78,9 +78,9 @@ async function connect(utils: ReturnType<typeof renderApp>, url = 'o/r/QA') {
 
 /**
  * Preact defers useEffect past the waitFor that a DOM assertion resolves on, so
- * window listeners an effect registers (the run keyboard handler, beforeunload)
- * are not attached yet when the step card first appears. Pump real time so the
- * scheduled flush lands before a test probes for them.
+ * the run screen's keyboard listener is not attached yet when the step card
+ * first appears. Pump real time so the scheduled flush lands before a test
+ * presses a key.
  */
 const flushEffects = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
@@ -330,37 +330,6 @@ describe('run keyboard shortcuts', () => {
       expect(status(utils)).toContain('Pending');
     });
   }
-});
-
-describe('run window guard (beforeunload)', () => {
-  /** Dispatch a cancelable beforeunload and report whether something blocked it. */
-  function fireBeforeUnload(): boolean {
-    const e = new Event('beforeunload', { cancelable: true });
-    const proceeded = window.dispatchEvent(e);
-    return !proceeded; // canceled => the browser would prompt
-  }
-
-  it('does not guard the setup screen', async () => {
-    renderApp();
-    await flushEffects();
-    expect(fireBeforeUnload()).toBe(false);
-  });
-
-  it('guards an active run, so a forced navigation prompts', async () => {
-    const utils = renderApp();
-    await startRun(utils);
-    await flushEffects();
-    expect(fireBeforeUnload()).toBe(true);
-  });
-
-  it('releases the guard once the run view is left', async () => {
-    const utils = renderApp();
-    await startRun(utils);
-    fireEvent.click(utils.getByText(/Finish/));
-    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeNull());
-    await flushEffects();
-    expect(fireBeforeUnload()).toBe(false);
-  });
 });
 
 describe('flushPatch (debounced sync)', () => {

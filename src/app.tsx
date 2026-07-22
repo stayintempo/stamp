@@ -216,22 +216,6 @@ export function App({ createClient }: AppProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, issue, localOnly]);
 
-  // Guard the run window against being navigated away from. STAMP's named tabs
-  // must keep their opener to stay reusable (see lib/links.ts), which leaves a
-  // page opened from a step able to do `opener.location = …`; beforeunload turns
-  // that from a silent swap of the run into a browser prompt the tester sees. It
-  // also covers the ordinary case of closing the tab mid-debounce. Not airtight
-  // — the prompt can be accepted — but it is the cheap half of the trade.
-  useEffect(() => {
-    if (view !== 'run') return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [view]);
-
   // --- connect / load ---
   async function connect(s: Settings) {
     const normalized: Settings = { ...s, appHost: normalizeAppHost(s.appHost) };

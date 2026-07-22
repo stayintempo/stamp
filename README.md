@@ -201,7 +201,11 @@ Until the first release is published, prod falls back to `main`, so the root and
   `window.opener` and navigate the STAMP tab (reverse tabnabbing). It cannot read
   your token — that is cross-origin `localStorage` — but it could navigate STAMP
   to a lookalike that asks for one. The exposure is bounded by who can write the
-  checklist you point at and which hosts it links to.
+  checklist you point at and which hosts it links to. Left unmitigated on
+  purpose: a checklist is a list of instructions a human follows, so a hostile
+  one can simply *tell* the tester to go somewhere and paste a token — the
+  opener adds little to a threat the format already carries. Revisit this if
+  STAMP ever holds a token scoped wider than the single checklist repo.
 
 ## License
 
