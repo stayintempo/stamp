@@ -40,8 +40,18 @@ have local progress for that run, your local state wins and is pushed up to the
 issue. The settings gear opens as an overlay that preserves the run — changing
 the checklist URL is the only action that ends it, and it asks first.
 
+The run screen shows **only the current step**. The header carries a one-line
+phase control (`Phase 3/14 · Workflows ▾`); clicking it opens the full phase
+navigator as a drawer, opened on the phase you are in, and jumping closes it. In
+a ~400px window an always-visible phase list pushed the step below the fold.
+
 Links inside a step open in **reusable named tabs**: links to the app host open
 in one `qa-app` tab beside STAMP; everything else opens in a `qa-docs` tab.
+Those links deliberately carry **no `rel="noopener"`** — the browser's
+"find a navigable by target name" lookup is skipped entirely when `noopener` is
+set, so a named tab could never be reused and every click would spawn a new tab.
+`referrerpolicy="no-referrer"` suppresses the referrer instead. See the note in
+`src/lib/links.ts`, and the trade-off under v1 limitations.
 
 ## Checklist folder convention (the format contract)
 
@@ -186,6 +196,16 @@ Until the first release is published, prod falls back to `main`, so the root and
 - **Branch names with `/`** aren't resolvable from `tree`/`blob` URLs (see above).
 - **Notes are single-line** in the issue mirror (multi-line notes are flattened to
   keep the round-trip stable).
+- **Opened tabs keep their opener.** Reusable named tabs and `rel=noopener` are
+  mutually exclusive (see above), so a page opened from a step can reach
+  `window.opener` and navigate the STAMP tab (reverse tabnabbing). It cannot read
+  your token — that is cross-origin `localStorage` — but it could navigate STAMP
+  to a lookalike that asks for one. The exposure is bounded by who can write the
+  checklist you point at and which hosts it links to. Left unmitigated on
+  purpose: a checklist is a list of instructions a human follows, so a hostile
+  one can simply *tell* the tester to go somewhere and paste a token — the
+  opener adds little to a threat the format already carries. Revisit this if
+  STAMP ever holds a token scoped wider than the single checklist repo.
 
 ## License
 

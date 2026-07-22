@@ -22,7 +22,8 @@ const linkCtx: LinkContext = {
 function renderStep(overrides: Partial<Parameters<typeof StepCard>[0]> = {}) {
   const onVerdict = vi.fn();
   const onNote = vi.fn();
-  const onFailResolved = vi.fn();
+  const onOpenNote = vi.fn();
+  const onCloseNote = vi.fn();
   const utils = render(
     <StepCard
       phase={flat[0].phase}
@@ -32,15 +33,17 @@ function renderStep(overrides: Partial<Parameters<typeof StepCard>[0]> = {}) {
       linkCtx={linkCtx}
       hasBack={false}
       hasNext={true}
+      noteOpen={false}
+      onOpenNote={onOpenNote}
+      onCloseNote={onCloseNote}
       onVerdict={onVerdict}
       onNote={onNote}
-      onFailResolved={onFailResolved}
       onBack={vi.fn()}
       onNext={vi.fn()}
       {...overrides}
     />,
   );
-  return { ...utils, onVerdict, onNote, onFailResolved };
+  return { ...utils, onVerdict, onNote, onOpenNote, onCloseNote };
 }
 
 describe('StepCard', () => {
@@ -55,7 +58,7 @@ describe('StepCard', () => {
     const { container } = renderStep();
     const link = container.querySelector('.body a[href="https://machine.local/panel"]') as HTMLAnchorElement;
     expect(link.getAttribute('target')).toBe('qa-app');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('referrerpolicy')).toBe('no-referrer');
   });
 
   it('fires onVerdict with the chosen status', () => {
@@ -66,21 +69,21 @@ describe('StepCard', () => {
     expect(onVerdict).toHaveBeenCalledWith('skip');
   });
 
-  it('opens the note dialog automatically on Fail', () => {
-    const { getByText, onVerdict, container } = renderStep();
-    fireEvent.click(getByText('✕ Fail'));
-    expect(onVerdict).toHaveBeenCalledWith('fail');
-    // a modal textarea is now present
-    expect(container.querySelector('dialog textarea')).toBeTruthy();
+  it('asks App to open the note editor rather than owning it', () => {
+    const { getByText, onOpenNote, container } = renderStep();
+    fireEvent.click(getByText('＋ Add note'));
+    expect(onOpenNote).toHaveBeenCalledTimes(1);
+    // StepCard holds no dialog state of its own: nothing opened locally.
+    expect(container.querySelector('dialog textarea')).toBeNull();
   });
 
-  it('lets you add a note on a non-fail status and reports it', () => {
-    const { getByText, container, onNote } = renderStep({ status: 'pass' });
-    fireEvent.click(getByText('＋ Add note'));
+  it('renders and submits the note editor when App says it is open', () => {
+    const { container, onNote, onCloseNote } = renderStep({ noteOpen: true, status: 'pass' });
     const ta = container.querySelector('dialog textarea') as HTMLTextAreaElement;
     fireEvent.input(ta, { target: { value: 'looked good' } });
     fireEvent.submit(ta.closest('form')!);
     expect(onNote).toHaveBeenCalledWith('looked good');
+    expect(onCloseNote).toHaveBeenCalledTimes(1);
   });
 
   it('shows the screenshot bridge only when an issue is active', () => {
@@ -91,41 +94,12 @@ describe('StepCard', () => {
     expect(noIssue.queryByText(/Attach screenshot via issue/)).toBeNull();
   });
 
-  it('opens the note dialog when the keyboard "f" fires (H3)', () => {
-    const { container, onVerdict } = renderStep();
-    fireEvent.keyDown(window, { key: 'f' });
-    expect(onVerdict).toHaveBeenCalledWith('fail');
-    expect(container.querySelector('dialog textarea')).toBeTruthy();
-  });
-
-  it('routes keyboard "p"/"s" through the verdict path', () => {
-    const pass = renderStep();
-    fireEvent.keyDown(window, { key: 'p' });
-    expect(pass.onVerdict).toHaveBeenCalledWith('pass');
-    pass.unmount();
-    const skip = renderStep();
-    fireEvent.keyDown(window, { key: 's' });
-    expect(skip.onVerdict).toHaveBeenCalledWith('skip');
-  });
-
-  it('suppresses shortcuts while the dialog is open (L3)', () => {
-    const { onVerdict } = renderStep();
-    fireEvent.keyDown(window, { key: 'f' }); // opens dialog, 1 fail
-    expect(onVerdict).toHaveBeenCalledTimes(1);
-    // Any further shortcut while the dialog is open is ignored — including focus
-    // on a dialog button, since suppression keys off dialog-open state, not the
-    // focused tag. (A plain BUTTON would otherwise slip past resolveKeyAction.)
-    fireEvent.keyDown(window, { key: 'f' });
-    fireEvent.keyDown(window, { key: 'p' });
-    expect(onVerdict).toHaveBeenCalledTimes(1);
-  });
-
-  it('guards a rapid double verdict keypress within one card (L8)', () => {
+  it('installs no keyboard listener of its own', () => {
     const { onVerdict } = renderStep();
     fireEvent.keyDown(window, { key: 'p' });
-    fireEvent.keyDown(window, { key: 'p' });
-    // Second press is swallowed by the per-instance guard.
-    expect(onVerdict).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(window, { key: 'f' });
+    // Shortcuts are App's job now — see the keyboard tests in app.test.tsx.
+    expect(onVerdict).not.toHaveBeenCalled();
   });
 
   it('renders phase and group intros when provided (M5)', () => {
@@ -146,17 +120,6 @@ describe('StepCard', () => {
     expect(container.querySelector('details.intro')).toBeNull();
   });
 
-  it('cancelling the dialog after a keyboard fail keeps the fail and advances', () => {
-    const { container, onVerdict, onFailResolved } = renderStep();
-    fireEvent.keyDown(window, { key: 'f' });
-    expect(onVerdict).toHaveBeenCalledWith('fail');
-    const cancelBtn = Array.from(container.querySelectorAll('dialog button')).find(
-      (b) => b.textContent === 'Cancel',
-    ) as HTMLButtonElement;
-    fireEvent.click(cancelBtn);
-    // Fail verdict already applied; closing advances past the step.
-    expect(onFailResolved).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('FailNoteDialog', () => {
@@ -203,14 +166,31 @@ describe('PhaseNav', () => {
     let state = emptyState();
     state = setStep(state, flat[0].step.id, { status: 'pass' });
     state = setStep(state, flat[1].step.id, { status: 'fail' });
-    const { getByText, container } = render(
+    const { container } = render(
       <PhaseNav doc={doc} state={state} currentIndex={0} onJump={vi.fn()} />,
     );
-    // expand the first phase
-    fireEvent.click(getByText('1. Brewing'));
+    // The phase holding currentIndex starts expanded, so no click is needed.
     const dots = container.querySelectorAll('.phase-steps .dot');
     expect(dots[0].classList.contains('pass')).toBe(true);
     expect(dots[1].classList.contains('fail')).toBe(true);
+  });
+
+  it('opens on the phase holding currentIndex, not the first phase', () => {
+    // currentIndex sits in phase 2; phase 1's steps must NOT be listed.
+    const inPhase2 = flat.findIndex((n) => n.phase.id !== flat[0].phase.id);
+    expect(inPhase2).toBeGreaterThan(0);
+    const { container, getByText } = render(
+      <PhaseNav doc={doc} state={emptyState()} currentIndex={inPhase2} onJump={vi.fn()} />,
+    );
+    const labels = Array.from(container.querySelectorAll('.phase-steps .lbl')).map(
+      (el) => el.textContent,
+    );
+    expect(labels).toContain(flat[inPhase2].step.label);
+    expect(labels).not.toContain(flat[0].step.label);
+
+    // Clicking the already-open phase collapses it.
+    fireEvent.click(getByText('2. Cleaning'));
+    expect(container.querySelectorAll('.phase-steps .lbl').length).toBe(0);
   });
 
   it('calls onJump with the global index when a step is clicked', () => {

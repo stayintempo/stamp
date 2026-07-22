@@ -30,11 +30,12 @@ import {
 } from './lib/state';
 import { createDebouncer } from './lib/debounce';
 import { normalizeAppHost, suggestAppHost, type LinkContext } from './lib/links';
+import { resolveKeyAction } from './lib/keys';
 import { Markdown } from './components/Markdown';
 import { SetupScreen } from './components/SetupScreen';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { RunHeader, type SyncStatus } from './components/RunHeader';
-import { PhaseNav } from './components/PhaseNav';
+import { PhaseDrawer } from './components/PhaseDrawer';
 import { StepCard } from './components/StepCard';
 import { FinishView } from './components/FinishView';
 import { Footer } from './components/Footer';
@@ -95,6 +96,8 @@ export function App({ createClient }: AppProps = {}) {
   const [posted, setPosted] = useState(false);
   const [postError, setPostError] = useState<string | undefined>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [phasesOpen, setPhasesOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncNotice, setSyncNotice] = useState(0);
   const [shaMismatch, setShaMismatch] = useState<IssueRef | null>(null);
@@ -419,21 +422,86 @@ export function App({ createClient }: AppProps = {}) {
   // --- step actions ---
   const current = nav[currentIndex];
 
+  /**
+   * Is an overlay currently the screen? One flag, derived in one place, so a new
+   * overlay can't quietly reopen the hole where p/f/s marked a step through it.
+   * Anything modal must be represented here — that is the whole contract.
+   */
+  const modalOpen = settingsOpen || phasesOpen || noteOpen;
+
   function advance() {
     if (!doc) return;
     const next = nextPending(currentIndex, runState, nav);
     setCurrentIndex(next);
   }
 
-  function onVerdict(status: StepStatus) {
+  /** Whether the open note editor was auto-opened by a Fail (so it advances). */
+  const openedForFail = useRef(false);
+
+  function applyVerdict(status: StepStatus) {
     if (!current) return;
     persist(setStep(runState, current.step.id, { status }));
+    if (status === 'fail') {
+      // A fail wants a note before moving on; advancing is deferred to close.
+      openedForFail.current = true;
+      setNoteOpen(true);
+    } else {
+      advance();
+    }
+  }
+
+  function closeNote() {
+    setNoteOpen(false);
+    // Guarded: <dialog> also fires close when we hide it, re-entering here.
+    if (openedForFail.current) {
+      openedForFail.current = false;
+      advance();
+    }
   }
 
   function onNote(note: string) {
     if (!current) return;
     persist(setStep(runState, current.step.id, { note: note || undefined }));
   }
+
+  /**
+   * The run screen's ONLY keyboard listener, deliberately sited next to
+   * `modalOpen`. It used to live in StepCard, which could only see its own note
+   * dialog, so every overlay added since had to remember to opt out — and the
+   * settings overlay never did. `actedOn` keeps a rapid second keypress from
+   * re-marking a step the current render has already acted on (L8); it clears on
+   * arrival at a step, so stepping back re-arms it.
+   */
+  const actedOn = useRef<string | null>(null);
+  useEffect(() => {
+    actedOn.current = null;
+  }, [currentIndex]);
+
+  useEffect(() => {
+    if (view !== 'run' || modalOpen || !current) return;
+    const handler = (e: KeyboardEvent) => {
+      const action = resolveKeyAction(e, e.target as HTMLElement | null);
+      if (!action) return;
+      switch (action) {
+        case 'pass':
+        case 'skip':
+        case 'fail':
+          if (actedOn.current === current.step.id) return;
+          actedOn.current = current.step.id;
+          applyVerdict(action);
+          break;
+        case 'prev':
+          setCurrentIndex((i) => Math.max(0, i - 1));
+          break;
+        case 'next':
+          setCurrentIndex((i) => Math.min(nav.length - 1, i + 1));
+          break;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, modalOpen, current, nav.length, runState]);
 
   function retrySync() {
     void flushPatch();
@@ -517,6 +585,13 @@ export function App({ createClient }: AppProps = {}) {
         issueUrl={issue?.htmlUrl}
         syncStatus={localOnly ? undefined : syncStatus}
         syncNotice={syncNotice}
+        phase={
+          current
+            ? { number: current.phaseNumber, count: doc.phases.length, title: current.phase.title }
+            : undefined
+        }
+        phasesOpen={phasesOpen}
+        onOpenPhases={() => setPhasesOpen(true)}
         onRetrySync={retrySync}
         onSettings={() => setSettingsOpen(true)}
         onFinish={() => setView('finish')}
@@ -535,7 +610,6 @@ export function App({ createClient }: AppProps = {}) {
           </button>
         </div>
       )}
-      <PhaseNav doc={doc} state={runState} currentIndex={currentIndex} onJump={setCurrentIndex} />
       {current && linkCtx && (
         <StepCard
           key={current.step.id}
@@ -552,14 +626,22 @@ export function App({ createClient }: AppProps = {}) {
           }
           hasBack={currentIndex > 0}
           hasNext={currentIndex < nav.length - 1}
-          onVerdict={(s) => {
-            onVerdict(s);
-            if (s !== 'fail') advance();
-          }}
+          noteOpen={noteOpen}
+          onOpenNote={() => setNoteOpen(true)}
+          onCloseNote={closeNote}
+          onVerdict={applyVerdict}
           onNote={onNote}
-          onFailResolved={advance}
           onBack={() => setCurrentIndex((i) => Math.max(0, i - 1))}
           onNext={() => setCurrentIndex((i) => Math.min(nav.length - 1, i + 1))}
+        />
+      )}
+      {phasesOpen && (
+        <PhaseDrawer
+          doc={doc}
+          state={runState}
+          currentIndex={currentIndex}
+          onJump={setCurrentIndex}
+          onClose={() => setPhasesOpen(false)}
         />
       )}
       {settingsOpen && (

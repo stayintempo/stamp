@@ -264,6 +264,35 @@ a {
   color: var(--muted);
 }
 
+/* ---- collapsed phase control (header) ---- */
+
+.phase-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  text-align: left;
+  background: var(--plane);
+  font-size: 13px;
+}
+.phase-pick .pp-pos {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.phase-pick .pp-title {
+  flex: 1;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.phase-pick .pp-caret {
+  flex: none;
+  color: var(--muted);
+}
+
 /* ---- phase nav ---- */
 
 .phasenav {
@@ -499,6 +528,25 @@ a {
   width: 100%;
   max-width: 380px;
 }
+/* ---- phase drawer ---- */
+
+.drawer-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+}
+.drawer-head {
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-panel .phasenav {
+  overflow-y: auto;
+  border-bottom: none;
+}
+
 .hint.warn,
 .warn-box {
   color: var(--fail);

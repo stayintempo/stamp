@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import type { Phase, Step } from '../lib/types';
 import type { StepStatus } from '../lib/state';
 import { screenshotReference } from '../lib/state';
 import { type LinkContext } from '../lib/links';
-import { resolveKeyAction } from '../lib/keys';
 import { Markdown } from './Markdown';
 import { FailNoteDialog } from './FailNoteDialog';
 
@@ -21,68 +20,23 @@ interface Props {
   groupIntro?: string;
   hasBack: boolean;
   hasNext: boolean;
+  /**
+   * Note-editor visibility. Owned by App, not here: it is one of the modal
+   * flags that gate the run screen's single keyboard listener, and that
+   * decision has to live in one place. See App's `modalOpen`.
+   */
+  noteOpen: boolean;
+  onOpenNote: () => void;
+  onCloseNote: () => void;
   onVerdict: (status: StepStatus) => void;
   onNote: (note: string) => void;
-  /** Called after the fail note dialog closes, to auto-advance. */
-  onFailResolved: () => void;
   onBack: () => void;
   onNext: () => void;
 }
 
 export function StepCard(props: Props) {
   const { phase, step, status, note, linkCtx, issueUrl } = props;
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [openedForFail, setOpenedForFail] = useState(false);
   const [copied, setCopied] = useState(false);
-
-  const verdict = (s: StepStatus) => {
-    props.onVerdict(s);
-    if (s === 'fail') {
-      setOpenedForFail(true);
-      setDialogOpen(true);
-    }
-  };
-
-  const closeDialog = () => {
-    setDialogOpen(false);
-    if (openedForFail) {
-      setOpenedForFail(false);
-      props.onFailResolved();
-    }
-  };
-
-  // Keyboard shortcuts live here (one StepCard instance per step, remounted via
-  // `key`), so `f` routes through the same verdict path as the button — opening
-  // the note dialog (H3). All shortcuts are suppressed while the dialog is open
-  // (dialog-open state, not tag sniffing) so focus on a dialog button can't leak
-  // a verdict (L3). A per-instance guard blocks a rapid second verdict keypress
-  // from re-marking after the card has already acted (L8).
-  const acted = useRef(false);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (dialogOpen) return;
-      const action = resolveKeyAction(e, e.target as HTMLElement | null);
-      if (!action) return;
-      switch (action) {
-        case 'pass':
-        case 'skip':
-        case 'fail':
-          if (acted.current) return;
-          acted.current = true;
-          verdict(action);
-          break;
-        case 'prev':
-          props.onBack();
-          break;
-        case 'next':
-          props.onNext();
-          break;
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dialogOpen]);
 
   const copyScreenshotRef = async () => {
     const ref = screenshotReference(phase.title, step);
@@ -126,19 +80,19 @@ export function StepCard(props: Props) {
       {step.separatorAfter && <Markdown markdown={step.separatorAfter} ctx={linkCtx} class="sep" />}
 
       <div class="verdict">
-        <button class={`pass ${status === 'pass' ? 'active' : ''}`} onClick={() => verdict('pass')}>
+        <button class={`pass ${status === 'pass' ? 'active' : ''}`} onClick={() => props.onVerdict('pass')}>
           ✓ Pass
         </button>
-        <button class={`fail ${status === 'fail' ? 'active' : ''}`} onClick={() => verdict('fail')}>
+        <button class={`fail ${status === 'fail' ? 'active' : ''}`} onClick={() => props.onVerdict('fail')}>
           ✕ Fail
         </button>
-        <button class={`skip ${status === 'skip' ? 'active' : ''}`} onClick={() => verdict('skip')}>
+        <button class={`skip ${status === 'skip' ? 'active' : ''}`} onClick={() => props.onVerdict('skip')}>
           ⏭ Skip
         </button>
       </div>
 
       <div class="note-tools row" style={{ justifyContent: 'space-between' }}>
-        <button class="linkish" onClick={() => setDialogOpen(true)}>
+        <button class="linkish" onClick={props.onOpenNote}>
           {note ? '📝 Edit note' : '＋ Add note'}
         </button>
         {issueUrl && (
@@ -159,15 +113,15 @@ export function StepCard(props: Props) {
       </div>
 
       <FailNoteDialog
-        open={dialogOpen}
+        open={props.noteOpen}
         title={status === 'fail' ? 'Note the failure' : 'Step note'}
         hint={status === 'fail' ? 'A note is encouraged so the failure is actionable.' : undefined}
         initial={note ?? ''}
         onSave={(n) => {
           props.onNote(n);
-          closeDialog();
+          props.onCloseNote();
         }}
-        onClose={closeDialog}
+        onClose={props.onCloseNote}
       />
     </section>
   );

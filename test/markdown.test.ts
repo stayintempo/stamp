@@ -29,7 +29,7 @@ describe('renderMarkdown sanitization (XSS negatives)', () => {
 
   it('does NOT let a doc-supplied target survive the sanitizer (tabnabbing)', () => {
     // A raw anchor with target must lose its target at sanitize time; only
-    // rewriteLinks may (re)assign target, and it always pairs it with noopener.
+    // rewriteLinks may (re)assign target.
     const html = renderMarkdown('<a href="https://evil.example/x" target="_blank">x</a>');
     expect(html).not.toContain('target');
   });
@@ -41,15 +41,15 @@ describe('renderMarkdown sanitization (XSS negatives)', () => {
 });
 
 describe('rewriteLinks tabnabbing hardening', () => {
-  it('normalizes a raw <a target> to a safe named target + rel', () => {
+  it('normalizes a raw <a target> to a safe named target', () => {
     const div = document.createElement('div');
     // Simulate a surface where a target somehow slipped in: rewriteLinks must
-    // overwrite it with a safe named tab and add rel=noopener noreferrer.
+    // overwrite it with a safe named tab and strip the doc-supplied rel.
     div.innerHTML = '<a href="https://machine.local/x" target="_blank">app</a>';
     rewriteLinks(div, ctx);
     const a = div.querySelector('a')!;
     expect(a.getAttribute('target')).toBe(APP_TAB);
-    expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(a.getAttribute('referrerpolicy')).toBe('no-referrer');
   });
 
   it('rewrites area[href] hotspots too, not just anchors', () => {
@@ -59,7 +59,7 @@ describe('rewriteLinks tabnabbing hardening', () => {
     rewriteLinks(div, ctx);
     const [ext, rel] = Array.from(div.querySelectorAll('area'));
     expect(ext.getAttribute('target')).toBe(DOCS_TAB);
-    expect(ext.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(ext.getAttribute('referrerpolicy')).toBe('no-referrer');
     expect(rel.getAttribute('href')).toContain('github.com/acme/coffee-qa/blob/deadbeef/QA/MANUAL.md');
     expect(rel.getAttribute('target')).toBe(DOCS_TAB);
   });
@@ -76,7 +76,7 @@ describe('rewriteLinks tabnabbing hardening', () => {
     expect(app.getAttribute('target')).toBe(APP_TAB);
     expect(ext.getAttribute('target')).toBe(DOCS_TAB);
     for (const a of Array.from(div.querySelectorAll('a'))) {
-      expect(a.getAttribute('rel')).toBe('noopener noreferrer');
+      expect(a.getAttribute('referrerpolicy')).toBe('no-referrer');
     }
   });
 });

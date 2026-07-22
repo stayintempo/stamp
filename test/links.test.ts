@@ -104,17 +104,41 @@ describe('normalizeAppHost', () => {
 });
 
 describe('rewriteLinks (DOM)', () => {
-  it('sets target + rel on every anchor', () => {
+  it('sets target + referrerpolicy on every anchor', () => {
     const div = document.createElement('div');
     div.innerHTML =
       '<a href="https://machine.local/x">app</a> <a href="../MANUAL.md">doc</a> <a href="https://other.test/y">ext</a>';
     rewriteLinks(div, ctx);
     const [app, rel, ext] = Array.from(div.querySelectorAll('a'));
     expect(app.getAttribute('target')).toBe(APP_TAB);
-    expect(app.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(app.getAttribute('referrerpolicy')).toBe('no-referrer');
     expect(rel.getAttribute('href')).toContain('github.com/acme/coffee-qa/blob/deadbeef/QA/MANUAL.md');
     expect(rel.getAttribute('target')).toBe(DOCS_TAB);
     expect(ext.getAttribute('target')).toBe(DOCS_TAB);
+  });
+
+  // Regression guard. rel=noopener makes the browser skip the "find a navigable
+  // by target name" lookup entirely, so a named target can never be reused and
+  // every click spawns a new tab — the exact bug the reusable qa-app/qa-docs
+  // tabs exist to avoid. rel=noreferrer implies noopener, so neither may appear.
+  it('never emits noopener or noreferrer, which would break named-tab reuse', () => {
+    const div = document.createElement('div');
+    div.innerHTML =
+      '<a href="https://machine.local/x">app</a> <a href="../MANUAL.md">doc</a> <a href="https://other.test/y">ext</a>';
+    rewriteLinks(div, ctx);
+    for (const a of Array.from(div.querySelectorAll('a'))) {
+      expect(a.hasAttribute('rel')).toBe(false);
+    }
+    expect(div.innerHTML).not.toMatch(/noopener|noreferrer/);
+  });
+
+  it('strips a doc-supplied rel rather than leaving it to re-add noopener', () => {
+    const div = document.createElement('div');
+    div.innerHTML = '<a href="https://other.test/y" rel="noopener">ext</a>';
+    rewriteLinks(div, ctx);
+    const a = div.querySelector('a')!;
+    expect(a.hasAttribute('rel')).toBe(false);
+    expect(a.getAttribute('target')).toBe(DOCS_TAB);
   });
 });
 

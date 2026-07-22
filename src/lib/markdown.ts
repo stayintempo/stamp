@@ -3,9 +3,11 @@
 // Source markdown comes from a GitHub repo the tester chose, but we still run
 // it through DOMPurify: the app renders it with innerHTML, so sanitizing is
 // the correct default. Crucially we do NOT allow `target` through the sanitizer:
-// a doc-controlled `target` would open a named/blank tab WITHOUT implicit
-// noopener, enabling reverse tabnabbing. links.rewriteLinks is the SOLE assigner
-// of target+rel, and it runs over every rendered surface after insertion.
+// the checklist must not get to choose which tab a link lands in, and STAMP's
+// named tabs intentionally keep their opener (see links.ts), so a doc-controlled
+// target would be a doc-controlled opener handle on the run window.
+// links.rewriteLinks is the SOLE assigner of target, and it runs over every
+// rendered surface after insertion.
 
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';

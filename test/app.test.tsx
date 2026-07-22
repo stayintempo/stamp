@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, fireEvent, waitFor, cleanup } from '@testing-library/preact';
+import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/preact';
 import { App, parseIssueNumber } from '../src/app';
 import { GithubClient, type IssueRef } from '../src/lib/github';
 import { formatMarker, type RunMeta } from '../src/lib/state';
@@ -76,11 +76,20 @@ async function connect(utils: ReturnType<typeof renderApp>, url = 'o/r/QA') {
   await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
 }
 
+/**
+ * Preact defers useEffect past the waitFor that a DOM assertion resolves on, so
+ * the run screen's keyboard listener is not attached yet when the step card
+ * first appears. Pump real time so the scheduled flush lands before a test
+ * presses a key.
+ */
+const flushEffects = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
 /** Connect and start a brand-new issue-backed run; resolve at the run view. */
 async function startRun(utils: ReturnType<typeof renderApp>) {
   await connect(utils);
   fireEvent.click(utils.getByText(/Start a new run/));
   await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+  await flushEffects();
 }
 
 beforeEach(() => localStorage.clear());
@@ -184,6 +193,143 @@ describe('resumeIssue validation (H2)', () => {
     // firstPending skips the locally-passed step 1 → lands on Step 2/2.
     expect(utils.getByText(/Step 2\/2/)).toBeTruthy();
   });
+});
+
+describe('run screen layout (phase list is on demand)', () => {
+  it('shows no phase list above the step card until the header control is used', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    // The step card is what the tester acts on: nothing but the header precedes it.
+    expect(utils.container.querySelector('.phasenav')).toBeNull();
+    const pick = utils.container.querySelector('.phase-pick') as HTMLButtonElement;
+    expect(pick).toBeTruthy();
+    expect(pick.getAttribute('aria-expanded')).toBe('false');
+    expect(pick.textContent).toContain('Phase 1/1');
+  });
+
+  it('opens the phase drawer from the header and closes it on jump', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.click(utils.container.querySelector('.phase-pick') as HTMLButtonElement);
+    expect(utils.container.querySelector('.phasenav')).toBeTruthy();
+    expect(
+      (utils.container.querySelector('.phase-pick') as HTMLButtonElement).getAttribute(
+        'aria-expanded',
+      ),
+    ).toBe('true');
+
+    // Jumping to a step dismisses the drawer and moves the run there.
+    const steps = utils.container.querySelectorAll('.phase-steps button');
+    fireEvent.click(steps[1]);
+    await waitFor(() => expect(utils.container.querySelector('.phasenav')).toBeNull());
+    expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 2/2');
+  });
+
+  it('Escape closes the drawer without changing the step', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.click(utils.container.querySelector('.phase-pick') as HTMLButtonElement);
+    expect(utils.container.querySelector('.phasenav')).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(utils.container.querySelector('.phasenav')).toBeNull());
+    expect(utils.container.querySelector('.stepcard .pos')?.textContent).toContain('Step 1/2');
+  });
+
+});
+
+describe('run keyboard shortcuts', () => {
+  const pos = (u: ReturnType<typeof renderApp>) =>
+    u.container.querySelector('.stepcard .pos')?.textContent ?? '';
+  const status = (u: ReturnType<typeof renderApp>) =>
+    u.container.querySelector('.stepcard .statusline')?.textContent ?? '';
+
+  it('marks pass and advances', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'p' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+  });
+
+  it('marks fail and opens the note editor instead of advancing', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'f' });
+    await waitFor(() => expect(utils.container.querySelector('dialog textarea')).toBeTruthy());
+    expect(pos(utils)).toContain('Step 1/2');
+    expect(status(utils)).toContain('Failed');
+  });
+
+  it('arrow keys move without marking', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    expect(status(utils)).toContain('Pending');
+  });
+
+  it('guards a second verdict keypress in the same frame (L8)', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    // Raw dispatch, NOT fireEvent: fireEvent wraps each call in act and flushes
+    // effects, which would rebind the listener to the next step in between and
+    // make the two presses legitimately land on different steps. Dispatching
+    // directly is the real scenario — two keypresses before a single re-render.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
+    await flushEffects();
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    // The 'f' was swallowed: step one is still passed, not failed.
+    expect(status(utils)).toContain('Passed');
+  });
+
+  it('re-arms the guard when you step back to a step', async () => {
+    const utils = renderApp();
+    await startRun(utils);
+    fireEvent.keyDown(window, { key: 'p' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    expect(status(utils)).toContain('Passed');
+    // Arriving at a step clears the guard, so the verdict can be changed. The
+    // new verdict advances, so read it back after stepping in again.
+    fireEvent.keyDown(window, { key: 's' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 2/2'));
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() => expect(pos(utils)).toContain('Step 1/2'));
+    expect(status(utils)).toContain('Skipped');
+  });
+
+  // One modalOpen flag gates one listener, so every overlay is covered by
+  // construction. The settings case was broken before that consolidation.
+  const overlays: Array<[string, (u: ReturnType<typeof renderApp>) => void]> = [
+    ['the phase drawer', (u) => fireEvent.click(u.container.querySelector('.phase-pick')!)],
+    ['the settings overlay', (u) => fireEvent.click(u.getByText('⚙︎'))],
+    ['the note editor', () => fireEvent.keyDown(window, { key: 'f' })],
+  ];
+
+  for (const [name, open] of overlays) {
+    it(`does NOT let a verdict shortcut fire through ${name}`, async () => {
+      const utils = renderApp();
+      await startRun(utils);
+      if (name === 'the note editor') {
+        // Fail first, then confirm further shortcuts cannot change that verdict.
+        open(utils);
+        await waitFor(() => expect(status(utils)).toContain('Failed'));
+        fireEvent.keyDown(window, { key: 'p' });
+        expect(pos(utils)).toContain('Step 1/2');
+        expect(status(utils)).toContain('Failed');
+        return;
+      }
+      open(utils);
+      fireEvent.keyDown(window, { key: 'p' });
+      expect(pos(utils)).toContain('Step 1/2');
+      expect(status(utils)).toContain('Pending');
+    });
+  }
 });
 
 describe('flushPatch (debounced sync)', () => {
