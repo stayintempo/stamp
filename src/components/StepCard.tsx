@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import type { Phase, Step } from '../lib/types';
 import type { StepStatus } from '../lib/state';
 import { screenshotReference } from '../lib/state';
-import { renderMarkdown } from '../lib/markdown';
-import { rewriteLinks, type LinkContext } from '../lib/links';
+import { type LinkContext } from '../lib/links';
+import { Markdown } from './Markdown';
 import { FailNoteDialog } from './FailNoteDialog';
 
 interface Props {
@@ -24,35 +24,11 @@ interface Props {
   onNext: () => void;
 }
 
-/** Render markdown into `el` and finalize links (targets, rel, nested checkboxes). */
-function useRenderedBody(markdown: string | undefined, ctx: LinkContext) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    if (!markdown) {
-      el.innerHTML = '';
-      return;
-    }
-    el.innerHTML = renderMarkdown(markdown);
-    rewriteLinks(el, ctx);
-    // Nested checkboxes become tester-local, toggleable (state not persisted).
-    el.querySelectorAll<HTMLInputElement>('input[type="checkbox"]').forEach((box) => {
-      box.disabled = false;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markdown, ctx.filePath, ctx.sha, ctx.appHost]);
-  return ref;
-}
-
 export function StepCard(props: Props) {
   const { phase, step, status, note, linkCtx, issueUrl } = props;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [openedForFail, setOpenedForFail] = useState(false);
   const [copied, setCopied] = useState(false);
-
-  const bodyRef = useRenderedBody(step.bodyMarkdown, linkCtx);
-  const sepRef = useRenderedBody(step.separatorBefore, linkCtx);
 
   const verdict = (s: StepStatus) => {
     props.onVerdict(s);
@@ -92,9 +68,11 @@ export function StepCard(props: Props) {
         <span class={`statusline ${status}`}>{statusText(status)}</span>
       </div>
 
-      {step.separatorBefore && <div class="sep" ref={sepRef} />}
+      {step.separatorBefore && <Markdown markdown={step.separatorBefore} ctx={linkCtx} class="sep" />}
 
-      <div class="body" ref={bodyRef} />
+      <Markdown markdown={step.bodyMarkdown} ctx={linkCtx} />
+
+      {step.separatorAfter && <Markdown markdown={step.separatorAfter} ctx={linkCtx} class="sep" />}
 
       <div class="verdict">
         <button class={`pass ${status === 'pass' ? 'active' : ''}`} onClick={() => verdict('pass')}>

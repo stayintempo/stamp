@@ -26,9 +26,9 @@ import {
   type StepStatus,
 } from './lib/state';
 import { createDebouncer } from './lib/debounce';
-import { suggestAppHost } from './lib/links';
-import { renderMarkdown } from './lib/markdown';
+import { suggestAppHost, type LinkContext } from './lib/links';
 import { resolveKeyAction } from './lib/keys';
+import { Markdown } from './components/Markdown';
 import { SetupScreen } from './components/SetupScreen';
 import { RunHeader } from './components/RunHeader';
 import { PhaseNav } from './components/PhaseNav';
@@ -363,7 +363,7 @@ export function App() {
       {doc.preamble && (
         <details class="preamble">
           <summary>Run overview</summary>
-          <Preamble markdown={doc.preamble} />
+          <Markdown markdown={doc.preamble} ctx={preambleCtx(doc, settings.appHost)} />
         </details>
       )}
       <PhaseNav doc={doc} state={runState} currentIndex={currentIndex} onJump={setCurrentIndex} />
@@ -398,8 +398,16 @@ export function App() {
 // small inline pieces
 // ---------------------------------------------------------------------------
 
-function Preamble({ markdown }: { markdown: string }) {
-  return <div class="body" dangerouslySetInnerHTML={{ __html: renderMarkdown(markdown) }} />;
+/** Link context for the root README preamble (relative links resolve against it). */
+function preambleCtx(doc: RunDoc, appHost: string): LinkContext {
+  const root = doc.source.path.replace(/^\/+|\/+$/g, '');
+  return {
+    appHost: appHost || undefined,
+    owner: doc.source.owner,
+    repo: doc.source.repo,
+    sha: doc.source.sha,
+    filePath: root ? `${root}/README.md` : 'README.md',
+  };
 }
 
 function Footer() {

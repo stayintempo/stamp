@@ -91,15 +91,20 @@ export function resolveLink(href: string, ctx: LinkContext): { href: string; tab
   return { href: `${blobBase}/${resolved}${anchor ? '#' + anchor : ''}`, tab: DOCS_TAB };
 }
 
-/** Apply link resolution + safe rel to every <a> under `root`. */
+/**
+ * Apply link resolution + safe target/rel to every link under `root`. This is
+ * the sole assigner of target/rel (the sanitizer strips both from source), so it
+ * MUST run over every rendered surface — no anchor may carry an un-rewritten
+ * target. Covers both a[href] and area[href] (image-map hotspots).
+ */
 export function rewriteLinks(root: ParentNode, ctx: LinkContext): void {
-  for (const a of Array.from(root.querySelectorAll('a[href]'))) {
-    const anchor = a as HTMLAnchorElement;
-    const resolved = resolveLink(anchor.getAttribute('href') ?? '', ctx);
+  for (const el of Array.from(root.querySelectorAll('a[href], area[href]'))) {
+    const link = el as HTMLAnchorElement | HTMLAreaElement;
+    const resolved = resolveLink(link.getAttribute('href') ?? '', ctx);
     if (!resolved) continue;
-    anchor.setAttribute('href', resolved.href);
-    anchor.setAttribute('target', resolved.tab);
-    anchor.setAttribute('rel', 'noopener noreferrer');
+    link.setAttribute('href', resolved.href);
+    link.setAttribute('target', resolved.tab);
+    link.setAttribute('rel', 'noopener noreferrer');
   }
 }
 
