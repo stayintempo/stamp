@@ -27,6 +27,16 @@ export class GithubError extends Error {
 
 const OWNER_REPO = /^[A-Za-z0-9._-]+$/;
 
+/** Extract the `rel="next"` URL from a GitHub Link header, if present. */
+function nextLink(header: string | null): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(',')) {
+    const m = part.match(/<([^>]+)>\s*;\s*rel="next"/);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
 /**
  * Accepts:
  *   https://github.com/{o}/{r}/tree/{ref}/{path...}
@@ -204,14 +214,34 @@ export class GithubClient {
     });
   }
 
-  /** Open issues in the repo whose body carries the STAMP marker. */
-  async listStampIssues(owner: string, repo: string, marker: string): Promise<IssueRef[]> {
-    const res = await this.request(`/repos/${owner}/${repo}/issues?state=open&per_page=100`);
-    const rows = (await res.json()) as Array<Record<string, unknown>>;
-    return rows
-      .filter((r) => typeof r.body === 'string' && (r.body as string).includes(marker))
-      .filter((r) => !('pull_request' in r))
-      .map((r) => this.toIssueRef(r));
+  /**
+   * Open issues in the repo whose body carries the STAMP marker. Follows
+   * Link-header pagination up to `maxPages`. An optional `match` predicate
+   * (called with each issue body) further filters to the current doc so a typo'd
+   * repo of unrelated STAMP runs isn't offered for the wrong checklist.
+   */
+  async listStampIssues(
+    owner: string,
+    repo: string,
+    marker: string,
+    match?: (body: string) => boolean,
+    maxPages = 3,
+  ): Promise<IssueRef[]> {
+    const out: IssueRef[] = [];
+    let url: string | undefined = `/repos/${owner}/${repo}/issues?state=open&per_page=100`;
+    for (let page = 0; page < maxPages && url; page++) {
+      const res: Response = await this.request(url);
+      const rows = (await res.json()) as Array<Record<string, unknown>>;
+      for (const r of rows) {
+        if ('pull_request' in r) continue;
+        const body = typeof r.body === 'string' ? (r.body as string) : '';
+        if (!body.includes(marker)) continue;
+        if (match && !match(body)) continue;
+        out.push(this.toIssueRef(r));
+      }
+      url = nextLink(res.headers.get('Link'));
+    }
+    return out;
   }
 
   private toIssueRef(r: unknown): IssueRef {

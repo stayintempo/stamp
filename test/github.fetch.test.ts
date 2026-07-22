@@ -62,6 +62,41 @@ describe('GithubClient happy paths', () => {
     const found = await c.listStampIssues('o', 'r', 'stamp:v1');
     expect(found.map((f) => f.number)).toEqual([1]);
   });
+
+  it('follows Link-header pagination across pages (capped)', async () => {
+    const page1 = res([{ number: 1, html_url: 'u1', title: 't1', body: 'stamp:v1' }], {
+      headers: { Link: '<https://api.github.com/repos/o/r/issues?state=open&per_page=100&page=2>; rel="next"' },
+    });
+    const page2 = res([{ number: 2, html_url: 'u2', title: 't2', body: 'stamp:v1' }]);
+    const fetchImpl = vi.fn(async (url: string) => (url.includes('page=2') ? page2 : page1));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const found = await c.listStampIssues('o', 'r', 'stamp:v1');
+    expect(found.map((f) => f.number)).toEqual([1, 2]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps pagination at maxPages even if next keeps pointing forward', async () => {
+    const fetchImpl = vi.fn(async () =>
+      res([{ number: 9, html_url: 'u', title: 't', body: 'stamp:v1' }], {
+        headers: { Link: '<https://api.github.com/repos/o/r/issues?page=99>; rel="next"' },
+      }),
+    );
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await c.listStampIssues('o', 'r', 'stamp:v1', undefined, 2);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('filters by a match predicate (only issues for the current doc)', async () => {
+    const fetchImpl = vi.fn(async () =>
+      res([
+        { number: 1, html_url: 'u1', title: 't1', body: 'stamp:v1 docUrl=acme/coffee-qa/QA' },
+        { number: 2, html_url: 'u2', title: 't2', body: 'stamp:v1 docUrl=other/repo/QB' },
+      ]),
+    );
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const found = await c.listStampIssues('o', 'r', 'stamp:v1', (b) => b.includes('acme/coffee-qa/QA'));
+    expect(found.map((f) => f.number)).toEqual([1]);
+  });
 });
 
 describe('GithubClient error mapping', () => {
