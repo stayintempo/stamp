@@ -81,7 +81,7 @@ export function FinishView({
             </button>
             {posted && <div class="statusline pass">Summary comment posted to the issue.</div>}
             {postError && <div class="error">Could not post summary: {postError}</div>}
-            <a href={issueUrl} target="qa-docs" rel="noopener noreferrer">
+            <a href={issueUrl} target="qa-docs" referrerpolicy="no-referrer">
               Open the run issue ↗
             </a>
           </>

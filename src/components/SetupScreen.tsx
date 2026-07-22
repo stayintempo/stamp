@@ -67,7 +67,7 @@ export function SetupScreen({ initial, busy, error, onConnect, onClearToken }: P
           />
           <p class="hint">
             Stored only in this browser. Create a{' '}
-            <a href={PAT_URL} target="qa-docs" rel="noopener noreferrer">
+            <a href={PAT_URL} target="qa-docs" referrerpolicy="no-referrer">
               fine-grained token
             </a>{' '}
             scoped to the single repo with <strong>Contents: read-only</strong> and{' '}

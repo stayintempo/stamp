@@ -5,6 +5,16 @@
 // - relative links / #anchors         -> rewritten to the pinned GitHub blob,
 //                                         opened in "qa-docs"
 // The pure helpers below are unit-tested; rewriteLinks applies them to a DOM.
+//
+// NO rel=noopener/noreferrer here, deliberately. Per the HTML Standard's rules
+// for choosing a navigable, the lookup that finds an already-open tab by name is
+// skipped entirely when noopener is true ("if name is not _blank AND noopener is
+// false, set chosen to the result of finding a navigable by target name"), and a
+// cross-origin tab is only findable at all because it stays "familiar with" us
+// through its opener. noopener therefore makes every click spawn a fresh tab,
+// which is the opposite of the reusable side-by-side tabs STAMP exists to give a
+// tester. Note rel=noreferrer implies noopener, so it can't be kept either;
+// referrerpolicy=no-referrer suppresses the referrer without touching the opener.
 
 export const APP_TAB = 'qa-app';
 export const DOCS_TAB = 'qa-docs';
@@ -92,10 +102,11 @@ export function resolveLink(href: string, ctx: LinkContext): { href: string; tab
 }
 
 /**
- * Apply link resolution + safe target/rel to every link under `root`. This is
- * the sole assigner of target/rel (the sanitizer strips both from source), so it
- * MUST run over every rendered surface — no anchor may carry an un-rewritten
- * target. Covers both a[href] and area[href] (image-map hotspots).
+ * Apply link resolution + safe target to every link under `root`. This is the
+ * sole assigner of target (the sanitizer strips target and rel from source), so
+ * it MUST run over every rendered surface — no anchor may carry an un-rewritten
+ * target. Any doc-supplied rel is dropped rather than overwritten, since we no
+ * longer set one. Covers both a[href] and area[href] (image-map hotspots).
  */
 export function rewriteLinks(root: ParentNode, ctx: LinkContext): void {
   for (const el of Array.from(root.querySelectorAll('a[href], area[href]'))) {
@@ -104,7 +115,8 @@ export function rewriteLinks(root: ParentNode, ctx: LinkContext): void {
     if (!resolved) continue;
     link.setAttribute('href', resolved.href);
     link.setAttribute('target', resolved.tab);
-    link.setAttribute('rel', 'noopener noreferrer');
+    link.removeAttribute('rel');
+    link.setAttribute('referrerpolicy', 'no-referrer');
   }
 }
 
