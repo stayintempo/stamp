@@ -27,9 +27,18 @@ than a checklist someone eyeballs and forgets.
 3. Start a run (creates a GitHub issue), resume an existing run, or run locally
    with no issue.
 4. Mark each step. State is saved to `localStorage` immediately and pushed to the
-   issue body (debounced) so the issue always mirrors your progress.
+   issue body (debounced) so the issue always mirrors your progress. A small sync
+   indicator shows synced / syncing / error (with a Retry), and the last change
+   is flushed with a keepalive request if you close the tab mid-debounce.
 5. Finish: see per-phase totals, blocking failures called out, and post a summary
    comment to the issue.
+
+Resuming validates the target issue first: it must carry STAMP's marker for the
+**same checklist** (a typo'd number is refused rather than overwritten), and a
+marker created against a different commit asks for confirmation. If you already
+have local progress for that run, your local state wins and is pushed up to the
+issue. The settings gear opens as an overlay that preserves the run — changing
+the checklist URL is the only action that ends it, and it asks first.
 
 Links inside a step open in **reusable named tabs**: links to the app host open
 in one `qa-app` tab beside STAMP; everything else opens in a `qa-docs` tab.
@@ -77,7 +86,11 @@ under you mid-pass.
 - A step's **label** is its first `**bold**` span, else its first sentence
   (truncated to ~80 chars).
 - **`## / ###` headings** between steps render as visual separators, not tracked
-  steps.
+  steps. Prose after the last step of a file (e.g. a closing `## Troubleshooting`)
+  renders too, as a trailing note on that step.
+- **Phase and group intro prose** (content before the first step of a phase
+  README / step-group file) is shown, collapsibly, when you enter that phase or
+  group.
 - A file with **no checkboxes** is itself a single step (the whole file is the
   body; its H1 or filename is the label).
 - Checkboxes **inside fenced code blocks are ignored.**
@@ -134,9 +147,12 @@ into each run issue's metadata (`"tool": "stamp@x.y.z"`).
 
 ## v1 limitations
 
-- **One active tester per issue.** Issue-body sync is a last-writer merge that
-  preserves foreign lines and hand edits, but concurrent testers on the same issue
-  can clobber each other's latest write.
+- **One active tester per issue.** Issue-body sync anchors each step to its task
+  line by **label text** (skipping fenced code and preserving foreign lines a
+  human inserted), but concurrent testers on the same issue can still clobber
+  each other's latest write. A step whose label is hand-renamed in the issue is
+  treated as a foreign line — left untouched and reported as "not in issue" —
+  rather than tracked by position.
 - **No inline screenshot upload.** GitHub has no public API for issue attachments,
   so STAMP instead offers "Attach screenshot via issue": it copies a reference
   line and opens the issue so you paste the image into a comment using GitHub's
