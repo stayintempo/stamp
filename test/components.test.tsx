@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/preact';
 import { StepCard } from '../src/components/StepCard';
+import { Markdown } from '../src/components/Markdown';
 import { PhaseNav } from '../src/components/PhaseNav';
 import { FailNoteDialog } from '../src/components/FailNoteDialog';
 import { buildRunDoc, flattenSteps } from '../src/lib/parse';
@@ -115,11 +116,41 @@ describe('StepCard', () => {
     expect(container.querySelector('details.intro strong')?.textContent).toContain('grinder');
   });
 
+  it('renders separator prose inside body so wide content stays contained', () => {
+    const { container } = renderStep({
+      step: {
+        ...flat[0].step,
+        separatorBefore: '## Section\n\n```\nmake deploy-image ENV=test IMAGE_TAG=vX.Y.Z # a very long trailing comment\n```',
+      },
+    });
+    const sep = container.querySelector('.sep')!;
+    expect(sep.classList.contains('body')).toBe(true);
+    expect(sep.querySelector('pre')).toBeTruthy();
+  });
+
   it('omits intro sections when not provided (negative)', () => {
     const { container } = renderStep();
     expect(container.querySelector('details.intro')).toBeNull();
   });
 
+});
+
+describe('Markdown container class', () => {
+  it('carries body alone when no variant is given', () => {
+    const { container } = render(<Markdown markdown="# hi" ctx={linkCtx} />);
+    expect(container.firstElementChild?.className).toBe('body');
+  });
+
+  it('adds a variant ALONGSIDE body, never instead of it', () => {
+    const { container } = render(<Markdown markdown="# hi" ctx={linkCtx} class="sep" />);
+    const el = container.firstElementChild!;
+    expect(el.classList.contains('body')).toBe(true);
+    expect(el.classList.contains('sep')).toBe(true);
+    // Regression: a variant that replaced `body` dropped the rules that keep
+    // wide content (pre, table, img) inside the column, so separator prose ran
+    // off the page.
+    expect(el.className).not.toBe('sep');
+  });
 });
 
 describe('FailNoteDialog', () => {

@@ -27,7 +27,13 @@
 
   --radius: 8px;
   --gap: 12px;
-  --col: 420px;
+  /* Cap, not a target. `.app` uses max-width, so the column already fills any
+   * narrower window — a tester who wants STAMP in a 400px strip beside the app
+   * just sizes the window that way. This only decides what happens when the
+   * window is bigger, and 420px there wasted the room: the same step ran 3628px
+   * tall at 420 versus 2074px at 760. Capped for line length (~70-75 characters
+   * of prose) rather than going full-width. */
+  --col: 760px;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 }
 
@@ -362,8 +368,11 @@ a {
   gap: 8px;
   align-items: center;
 }
+/* Separator prose: headings between steps, plus whatever prose follows them.
+ * It can run to many paragraphs with tables and code, so this only marks the
+ * block as untracked context — the blanket bold it used to carry made whole
+ * sections unreadable. Headings inside style themselves via `.body`. */
 .sep {
-  font-weight: 700;
   color: var(--ink-2);
   border-left: 3px solid var(--line);
   padding-left: 8px;
