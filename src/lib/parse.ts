@@ -169,10 +169,13 @@ export function parseFileSteps(markdown: string): ParsedFile {
         result.badge = sb.badge;
         continue;
       }
-      // Any other heading terminates the current step and stands as a separator.
+      // A heading terminates the current step. Before the first step it is still
+      // part of the phase/group intro (the documented contract); only once a step
+      // exists does a heading begin a genuine between-step separator.
       if (mode === 'step') flushStep();
       mode = 'pre';
-      sepLines.push(line);
+      if (result.steps.length === 0) introLines.push(line);
+      else sepLines.push(line);
       continue;
     }
 
