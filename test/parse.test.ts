@@ -39,12 +39,104 @@ describe('parseFileSteps', () => {
     expect(powerOn.body).toMatch(/- \[ \] sub: descaling light is off/);
   });
 
-  it('treats ## / ### headings between steps as separators', () => {
+  it('treats ## / ### headings between steps as separators, but not before the first step', () => {
     const p = parseFileSteps(cleaningReadme);
     expect(p.steps).toHaveLength(3);
-    expect(p.steps[0].separatorBefore).toContain('## Daily');
+    // "## Daily" precedes the first step, so it is intro, not a separator.
+    expect(p.intro).toContain('## Daily');
+    expect(p.steps[0].separatorBefore).toBeUndefined();
+    // "## Weekly" sits genuinely between steps and remains a separator.
     expect(p.steps[1].separatorBefore).toContain('## Weekly');
     expect(p.steps[2].separatorBefore).toBeUndefined();
+    // The pre-step heading does NOT leak into the between-step separator.
+    expect(p.steps[1].separatorBefore).not.toContain('## Daily');
+  });
+
+  it('routes pre-step headings, tables and fenced code into intro, not the first separatorBefore (#15)', () => {
+    const md = [
+      '# Operator Setup',
+      '',
+      'Lead paragraph of intro prose.',
+      '',
+      '## Prerequisites',
+      '',
+      '| Item | Value |',
+      '| ---- | ----- |',
+      '| Env  | test  |',
+      '',
+      '```sh',
+      'export TOKEN=abc',
+      '```',
+      '',
+      '### Notes',
+      '',
+      'A closing note before the checklist begins.',
+      '',
+      '- [ ] First real step.',
+      '- [ ] Second real step.',
+    ].join('\n');
+    const p = parseFileSteps(md);
+    expect(p.steps).toHaveLength(2);
+    // Every scrap of pre-step content lands in intro...
+    expect(p.intro).toContain('Lead paragraph');
+    expect(p.intro).toContain('## Prerequisites');
+    expect(p.intro).toContain('| Item | Value |');
+    expect(p.intro).toContain('export TOKEN=abc');
+    expect(p.intro).toContain('### Notes');
+    expect(p.intro).toContain('closing note');
+    // ...and none of it leaks onto the first step as a separator (negative).
+    expect(p.steps[0].separatorBefore).toBeUndefined();
+    expect(p.intro).not.toContain('First real step');
+  });
+
+  it('still classifies genuine between-step prose as a separator, never as intro (#15 negative)', () => {
+    const md = [
+      '# T',
+      '',
+      'Intro line.',
+      '',
+      '- [ ] Step one.',
+      '',
+      '## Interlude',
+      '',
+      'Prose that sits between two steps.',
+      '',
+      '- [ ] Step two.',
+    ].join('\n');
+    const p = parseFileSteps(md);
+    expect(p.steps).toHaveLength(2);
+    expect(p.intro).toBe('Intro line.');
+    // The interlude is a separator on step two, and must not bleed into intro.
+    expect(p.steps[1].separatorBefore).toContain('## Interlude');
+    expect(p.steps[1].separatorBefore).toContain('between two steps');
+    expect(p.intro).not.toContain('Interlude');
+    expect(p.steps[0].separatorBefore).toBeUndefined();
+  });
+
+  it('an all-prose file with headings but no checkboxes still yields zero parsed steps (#15)', () => {
+    const md = ['# Just Prose', '', 'Opening prose.', '', '## Section', '', 'More prose, no checkboxes.'].join('\n');
+    const p = parseFileSteps(md);
+    expect(p.steps).toHaveLength(0);
+    expect(p.title).toBe('Just Prose');
+    // With no steps, all headings/prose collect as intro (whole-file step upstream).
+    expect(p.intro).toContain('Opening prose.');
+    expect(p.intro).toContain('## Section');
+    expect(p.intro).toContain('More prose');
+  });
+
+  it('leaves step identity (raw/id) unchanged when pre-step prose moves into intro (#15)', () => {
+    // Same steps, but the second doc adds a pre-step heading + table. The steps'
+    // raw text — and therefore their ids — must be identical, so in-flight runs
+    // keep their issue-body anchors.
+    const withoutIntroHeading = '# P\n\nplain intro\n\n- [ ] Alpha step.\n- [ ] Beta step.';
+    const withIntroHeading = '# P\n\nplain intro\n\n## Heading\n\n| a | b |\n| - | - |\n\n- [ ] Alpha step.\n- [ ] Beta step.';
+    const a = parseFileSteps(withoutIntroHeading);
+    const b = parseFileSteps(withIntroHeading);
+    expect(a.steps.map((s) => s.raw)).toEqual(b.steps.map((s) => s.raw));
+
+    const docA = buildRunDoc(src, [{ path: 'QA/x.md', content: withoutIntroHeading }]);
+    const docB = buildRunDoc(src, [{ path: 'QA/x.md', content: withIntroHeading }]);
+    expect(flattenSteps(docA).map((x) => x.step.id)).toEqual(flattenSteps(docB).map((x) => x.step.id));
   });
 
   it('a file with no checkboxes yields zero parsed steps (whole-file handled upstream)', () => {
