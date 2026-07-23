@@ -40,7 +40,8 @@ brew --shot
 - [ ] **Check crema.** A thin layer of crema should form on top.
 `;
 
-// README-only phase with section headings between steps (separators).
+// README-only phase with two section headings: the pre-first-step "## Daily" is
+// intro, and the between-step "## Weekly" is a separator.
 export const cleaningReadme = `# 2. Cleaning [INFORMATIONAL]
 
 ## Daily

@@ -126,7 +126,7 @@ describe('parseFileSteps', () => {
 
   it('leaves step identity (raw/id) unchanged when pre-step prose moves into intro (#15)', () => {
     // Same steps, but the second doc adds a pre-step heading + table. The steps'
-    // raw text — and therefore their ids — must be identical, so in-flight runs
+    // raw text (and therefore their ids) must be identical, so in-flight runs
     // keep their issue-body anchors.
     const withoutIntroHeading = '# P\n\nplain intro\n\n- [ ] Alpha step.\n- [ ] Beta step.';
     const withIntroHeading = '# P\n\nplain intro\n\n## Heading\n\n| a | b |\n| - | - |\n\n- [ ] Alpha step.\n- [ ] Beta step.';
