@@ -114,6 +114,21 @@ describe('connect', () => {
     expect(utils.getByText(/Loaded 1 phase/)).toBeTruthy();
   });
 
+  it('shows the ref and the pinned sha so the tester can see what they got', async () => {
+    const utils = renderApp();
+    await connect(utils);
+    expect(utils.getByText(/Loaded 1 phase/).textContent).toMatch(/pinned to\s*main\s*@\s*sha123/);
+  });
+
+  it('carries a typed @ref through to the Start panel and skips the default branch', async () => {
+    const utils = renderApp();
+    await connect(utils, 'o/r/QA@v1.2.0');
+    expect(utils.getByText(/Loaded 1 phase/).textContent).toMatch(/pinned to\s*v1\.2\.0\s*@\s*sha123/);
+    expect(utils.calls.resolveCommitSha).toHaveBeenCalledWith('o', 'r', 'v1.2.0');
+    // negative: pinning means the default branch is never consulted
+    expect(utils.calls.getDefaultBranch).not.toHaveBeenCalled();
+  });
+
   it('surfaces an error and stays on setup when loading fails', async () => {
     const utils = renderApp({ failResolve: true });
     const input = utils.container.querySelector('#gh') as HTMLInputElement;
