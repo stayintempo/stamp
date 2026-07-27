@@ -701,7 +701,8 @@ function StartPanel(p: StartProps) {
         <button onClick={p.onBack}>◂ Settings</button>
       </div>
       <p class="hint">
-        Loaded {p.doc.phases.length} phase(s), pinned to <code>{p.doc.source.sha.slice(0, 7)}</code>.
+        Loaded {p.doc.phases.length} phase(s), pinned to <code>{p.doc.source.ref}</code> @{' '}
+        <code>{p.doc.source.sha.slice(0, 7)}</code>.
       </p>
       {p.error && <div class="error">{p.error}</div>}
 

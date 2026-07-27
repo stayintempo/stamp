@@ -205,3 +205,50 @@ describe('loadRunDoc (end-to-end over injected fetch)', () => {
     await expect(loadRunDoc(c, parseSourceUrl('o/r/QA'))).rejects.toThrow(/No markdown files/);
   });
 });
+
+describe('loadRunDoc with a pinned @ref', () => {
+  const mdTree = { tree: [{ path: 'QA/README.md', type: 'blob' }] };
+
+  function pinnedFetch(onCommits: (url: string) => Response) {
+    return vi.fn(async (url: string) => {
+      if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
+      if (url.includes('/commits/')) return onCommits(url);
+      if (url.includes('/git/trees/')) return res(mdTree);
+      if (url.includes('QA/README.md')) return res(null, { text: '# QA\n\n- [ ] **Step.** Do it.' });
+      throw new Error(`unexpected url ${url}`);
+    });
+  }
+
+  it('resolves the pinned ref and never asks for the default branch', async () => {
+    const fetchImpl = pinnedFetch(() => res({ sha: 'pinnedsha' }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@v1.2.0'));
+    expect(doc.source.ref).toBe('v1.2.0');
+    expect(doc.source.sha).toBe('pinnedsha');
+    expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/commits/v1.2.0'))).toBe(true);
+    // negative: the default-branch lookup is skipped entirely when pinned
+    expect(fetchImpl.mock.calls.some((c) => /\/repos\/[^/]+\/[^/]+$/.test(String(c[0])))).toBe(false);
+  });
+
+  it('percent-encodes a slash-containing branch ref', async () => {
+    const fetchImpl = pinnedFetch(() => res({ sha: 'branchsha' }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@fix/my-branch'));
+    expect(doc.source.ref).toBe('fix/my-branch');
+    expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/commits/fix%2Fmy-branch'))).toBe(true);
+  });
+
+  it('names the ref when GitHub 422s it, rather than echoing the raw API error', async () => {
+    const fetchImpl = pinnedFetch(() => res({ message: 'No commit found for SHA: v9.9.9' }, { status: 422 }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await expect(loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@v9.9.9'))).rejects.toThrow(
+      /Ref "v9\.9\.9" not found in acme\/coffee-qa/,
+    );
+  });
+
+  it('leaves a 404 alone, since that means the repo is unreadable (negative)', async () => {
+    const fetchImpl = pinnedFetch(() => res({ message: 'Not Found' }, { status: 404 }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await expect(loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@v1'))).rejects.toThrow(/no access to this repo/);
+  });
+});

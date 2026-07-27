@@ -4,6 +4,7 @@ import { StepCard } from '../src/components/StepCard';
 import { Markdown } from '../src/components/Markdown';
 import { PhaseNav } from '../src/components/PhaseNav';
 import { FailNoteDialog } from '../src/components/FailNoteDialog';
+import { SetupScreen } from '../src/components/SetupScreen';
 import { buildRunDoc, flattenSteps } from '../src/lib/parse';
 import { emptyState, setStep } from '../src/lib/state';
 import type { LinkContext } from '../src/lib/links';
@@ -133,6 +134,34 @@ describe('StepCard', () => {
     expect(container.querySelector('details.intro')).toBeNull();
   });
 
+});
+
+describe('SetupScreen', () => {
+  const settings = { githubUrl: '', token: '', appHost: '' };
+
+  it('teaches the @ref pinning form, since the bare form silently follows main', () => {
+    const utils = render(<SetupScreen initial={settings} busy={false} onConnect={vi.fn()} />);
+    const hint = utils.container.querySelector('.field .hint')?.textContent ?? '';
+    expect(hint).toContain('@ref');
+    expect(hint).toMatch(/QA@v1\.2\.0/);
+    expect(hint).toMatch(/branch/);
+  });
+
+  it('offers the pinned form in the placeholder too (not just prose)', () => {
+    const utils = render(<SetupScreen initial={settings} busy={false} onConnect={vi.fn()} />);
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    expect(input.placeholder).toContain('@');
+  });
+
+  it('does not lose the typed value when submitting (negative: no reset)', () => {
+    const onConnect = vi.fn();
+    const utils = render(<SetupScreen initial={settings} busy={false} onConnect={onConnect} />);
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA@v1.2.0' } });
+    fireEvent.submit(input.closest('form')!);
+    expect(onConnect).toHaveBeenCalledWith(expect.objectContaining({ githubUrl: 'o/r/QA@v1.2.0' }));
+    expect(input.value).toBe('o/r/QA@v1.2.0');
+  });
 });
 
 describe('Markdown container class', () => {
