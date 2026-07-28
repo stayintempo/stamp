@@ -14,6 +14,8 @@ interface Props {
   syncNotice?: number;
   /** Where the run currently is; absent only if the doc has no steps. */
   phase?: { number: number; count: number; title: string };
+  /** How many steps reduced mode auto-skipped at run start (0 = no banner). */
+  autoSkipped?: number;
   phasesOpen: boolean;
   onOpenPhases: () => void;
   onRetrySync?: () => void;
@@ -61,6 +63,7 @@ export function RunHeader({
   syncStatus,
   syncNotice,
   phase,
+  autoSkipped,
   phasesOpen,
   onOpenPhases,
   onRetrySync,
@@ -80,6 +83,11 @@ export function RunHeader({
       </div>
       <ProgressBar counts={summary.totals} />
       <CountsRow counts={summary.totals} />
+      {autoSkipped != null && autoSkipped > 0 && (
+        <div class="reduced-banner">
+          {autoSkipped} step{autoSkipped === 1 ? '' : 's'} auto-skipped (machine-covered)
+        </div>
+      )}
       {phase && (
         <button
           class="phase-pick"

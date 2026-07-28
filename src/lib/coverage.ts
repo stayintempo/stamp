@@ -11,9 +11,16 @@
 // heading-aware (like scanBodyTasks) and tolerant: a missing table, or a
 // malformed row, yields no entry rather than throwing.
 
+import type { RunDoc } from './types';
+import { flattenSteps } from './parse';
+import { setStep, stepState, type RunState, type StepState } from './state';
+
 const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 const LEDGER_HEADING_RE = /^#{1,6}\s+Per-box ledger\b/i;
+
+/** Tags whose boxes a machine already covers (kept identical to seed-qa's set). */
+export const MACHINE_COVERED_TAGS = new Set(['CI', 'SEED']);
 
 /** Strip a single pair of surrounding backticks and trim, so `` `qa:01.x` `` == `qa:01.x`. */
 function cell(raw: string): string {
@@ -77,4 +84,30 @@ export function parseCoverageLedger(markdown: string): Map<string, string> {
     out.set(id, tag.toUpperCase());
   }
   return out;
+}
+
+/**
+ * Pre-seed a run for reduced mode: every machine-covered box (tag CI or SEED)
+ * that is still `pending` becomes an auto-skip carrying a provisional `auto:`
+ * note. Never overwrites an existing status, so a tester verdict or a seed-qa
+ * check already imported into the state survives. Returns the new state and the
+ * number of boxes auto-skipped (for the banner).
+ */
+export function preSeedReduced(
+  doc: RunDoc,
+  state: RunState,
+  coverage: Map<string, string>,
+): { state: RunState; count: number } {
+  let next = state;
+  let count = 0;
+  for (const { step } of flattenSteps(doc)) {
+    if (!step.stableId) continue;
+    const tag = coverage.get(step.stableId);
+    if (!tag || !MACHINE_COVERED_TAGS.has(tag)) continue;
+    if (stepState(next, step.id).status !== 'pending') continue; // never overwrite
+    const seeded: StepState = { status: 'skip', note: `auto: machine-covered (${tag})` };
+    next = setStep(next, step.id, seeded);
+    count++;
+  }
+  return { state: next, count };
 }

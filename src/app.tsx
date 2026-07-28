@@ -29,6 +29,7 @@ import {
   type StepStatus,
 } from './lib/state';
 import { createDebouncer } from './lib/debounce';
+import { parseCoverageLedger, preSeedReduced } from './lib/coverage';
 import { normalizeAppHost, suggestAppHost, type LinkContext } from './lib/links';
 import { resolveKeyAction } from './lib/keys';
 import { Markdown } from './components/Markdown';
@@ -101,6 +102,7 @@ export function App({ createClient }: AppProps = {}) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncNotice, setSyncNotice] = useState(0);
   const [shaMismatch, setShaMismatch] = useState<IssueRef | null>(null);
+  const [autoSkipped, setAutoSkipped] = useState(0);
 
   const clientRef = useRef<GithubClient | null>(null);
   // Latest values for the debounced PATCH, which closes over stale state otherwise.
@@ -121,6 +123,20 @@ export function App({ createClient }: AppProps = {}) {
     path: d.source.path,
     tool: `stamp@${VERSION}`,
   });
+
+  /**
+   * Reduced-mode pre-seed: with the toggle on and the doc carrying a COVERAGE.md
+   * ledger, auto-skip every still-pending machine-covered (CI/SEED) box. Returns
+   * the seeded state and the count (0 when off or no ledger). Always applied to
+   * state that has ALREADY absorbed any imported issue/local status, so it never
+   * overwrites a real verdict.
+   */
+  function reducedPreSeed(d: RunDoc, state: RunState): { state: RunState; count: number } {
+    if (!latest.current.settings.reducedMode || !d.coverage) return { state, count: 0 };
+    const cov = parseCoverageLedger(d.coverage);
+    if (cov.size === 0) return { state, count: 0 };
+    return preSeedReduced(d, state, cov);
+  }
 
   // --- issue-body PATCH, debounced ~3s after the last change ---
   const patcher = useRef(
@@ -281,10 +297,20 @@ export function App({ createClient }: AppProps = {}) {
       setLocalOnly(false);
       lastBody.current = created.body;
       const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, created.number);
-      setRunState(restored);
-      setSyncStatus('synced');
+      const { state: seeded, count } = reducedPreSeed(d, restored);
+      setAutoSkipped(count);
+      setRunState(seeded);
       setSyncNotice(0);
-      setCurrentIndex(firstPending(d, restored));
+      if (count > 0) {
+        // The fresh issue body is all-pending; push the auto-skips onto it.
+        saveRunState(canonicalDocUrl(d.source), d.source.sha, created.number, seeded);
+        dirty.current = true;
+        setSyncStatus('pending');
+        patcher.current.schedule();
+      } else {
+        setSyncStatus('synced');
+      }
+      setCurrentIndex(firstPending(d, seeded));
       setView('run');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -345,7 +371,9 @@ export function App({ createClient }: AppProps = {}) {
     // state out of the issue body (H4b).
     const local = loadRunState(canonical, d.source.sha, found.number);
     const hasLocal = Object.keys(local.statuses).length > 0;
-    const state = hasLocal ? local : parseIssueBody(found.body, d);
+    const imported = hasLocal ? local : parseIssueBody(found.body, d);
+    const { state, count } = reducedPreSeed(d, imported);
+    setAutoSkipped(count);
 
     setIssue(found);
     setLocalOnly(false);
@@ -355,7 +383,7 @@ export function App({ createClient }: AppProps = {}) {
     setShaMismatch(null);
     setError(undefined);
     setCurrentIndex(firstPending(d, state));
-    if (hasLocal) {
+    if (hasLocal || count > 0) {
       dirty.current = true;
       setSyncStatus('pending');
       patcher.current.schedule();
@@ -374,8 +402,11 @@ export function App({ createClient }: AppProps = {}) {
     setIssue(null);
     setSyncStatus('idle');
     const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, null);
-    setRunState(restored);
-    setCurrentIndex(firstPending(d, restored));
+    const { state: seeded, count } = reducedPreSeed(d, restored);
+    setAutoSkipped(count);
+    if (count > 0) saveRunState(canonicalDocUrl(d.source), d.source.sha, null, seeded);
+    setRunState(seeded);
+    setCurrentIndex(firstPending(d, seeded));
     setView('run');
   }
 
@@ -590,6 +621,7 @@ export function App({ createClient }: AppProps = {}) {
             ? { number: current.phaseNumber, count: doc.phases.length, title: current.phase.title }
             : undefined
         }
+        autoSkipped={autoSkipped}
         phasesOpen={phasesOpen}
         onOpenPhases={() => setPhasesOpen(true)}
         onRetrySync={retrySync}
