@@ -83,10 +83,24 @@ async function connect(utils: ReturnType<typeof renderApp>, url = 'o/r/QA') {
 /**
  * Preact defers useEffect past the waitFor that a DOM assertion resolves on, so
  * the run screen's keyboard listener is not attached yet when the step card
- * first appears. Pump real time so the scheduled flush lands before a test
- * presses a key.
+ * first appears. Wait out Preact's own flush chain rather than a fixed delay:
+ * `afterNextFrame` registers a rAF callback (plus a 35ms timer as a fallback)
+ * and that callback schedules the flush on one more timer. A pending flush
+ * therefore registered its rAF before ours and, since jsdom runs same-frame
+ * callbacks in registration order and timers queued in the same tick fire
+ * FIFO, its flush always lands before we resolve. A fixed pump instead races
+ * the frame and loses on a busy machine, which made every keyboard test
+ * flaky (#18).
+ *
+ * The act() wrapper is load-bearing, not decoration: it captures any flush
+ * scheduled during the wait and drains it on exit, which is what covers an
+ * effect that sets state and so queues a further deferred effect. Do not
+ * reduce this to a bare promise.
  */
-const flushEffects = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+const flushEffects = () =>
+  act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+  });
 
 /** Connect and start a brand-new issue-backed run; resolve at the run view. */
 async function startRun(utils: ReturnType<typeof renderApp>) {
