@@ -531,4 +531,29 @@ describe('reduced mode (phase 2)', () => {
     // Every box is still pending: the run starts on Alpha.
     expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
   });
+
+  it('resuming an existing run with reduced mode on pre-seeds nothing (fix 7 negative)', async () => {
+    // A shared full-mode run: all boxes pending, no auto-skips in the body.
+    const resumeBody = `${formatMarker(META())}\n\n## QA\n- [ ] Alpha. <!-- qa:01.a -->\n- [ ] Beta. <!-- qa:02.b -->\n- [ ] Gamma. <!-- qa:03.c -->`;
+    const utils = renderApp({
+      ...withCoverage,
+      getIssue: (n) => ({ number: n, htmlUrl: 'u', title: 't', body: resumeBody }),
+    });
+    // Connect with reduced mode ON.
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA' } });
+    fireEvent.click(utils.container.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
+    // Resume the existing run instead of starting a new one.
+    const resumeInput = utils.getByPlaceholderText('issue # or issue URL') as HTMLInputElement;
+    fireEvent.input(resumeInput, { target: { value: '9' } });
+    fireEvent.click(utils.getByText('Resume'));
+    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+    await flushEffects();
+    // No pre-seed on resume: no banner, and the run starts on the first box Alpha
+    // (nothing was auto-skipped past it), so a toggled-on resume cannot mass-skip.
+    expect(utils.queryByText(/auto-skipped/)).toBeNull();
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
+  });
 });

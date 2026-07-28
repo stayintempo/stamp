@@ -389,11 +389,11 @@ export function App({ createClient }: AppProps = {}) {
     const hasLocal = Object.keys(local.statuses).length > 0;
     // Read the issue body (which reflects any seed-qa checks) and reconcile it
     // with local state so seed-qa evidence upgrades a provisional auto-skip while
-    // the tester's own verdicts win; then pre-seed still-pending covered boxes.
+    // the tester's own verdicts win. Resume never pre-seeds reduced mode; that is
+    // a new-run action only, so a toggled-on resume cannot mass-skip a shared run.
     const issueState = parseIssueBody(found.body, d);
-    const imported = hasLocal ? reconcileResumeState(issueState, local) : issueState;
-    const { state, count } = reducedPreSeed(d, imported);
-    setAutoSkipped(count);
+    const state = hasLocal ? reconcileResumeState(issueState, local) : issueState;
+    setAutoSkipped(0);
 
     setIssue(found);
     setLocalOnly(false);
@@ -423,7 +423,11 @@ export function App({ createClient }: AppProps = {}) {
     setIssue(null);
     setSyncStatus('idle');
     const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, null);
-    const { state: seeded, count } = reducedPreSeed(d, restored);
+    // Pre-seed reduced mode only when this is a FRESH local run (no saved state);
+    // resuming an existing local run never pre-seeds, matching the new-run-only
+    // rule and the toggle's "takes effect on the next run you start" hint.
+    const fresh = Object.keys(restored.statuses).length === 0;
+    const { state: seeded, count } = fresh ? reducedPreSeed(d, restored) : { state: restored, count: 0 };
     setAutoSkipped(count);
     if (count > 0) saveRunState(canonicalDocUrl(d.source), d.source.sha, null, seeded);
     setRunState(seeded);
