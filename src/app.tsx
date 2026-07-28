@@ -307,25 +307,20 @@ export function App({ createClient }: AppProps = {}) {
     try {
       const date = new Date().toISOString().slice(0, 10);
       const title = `QA run: ${d.source.path || '/'} @ ${d.source.ref} (${date})`;
-      const body = serializeIssueBody(d, emptyState(), meta(d));
+      // A new run is always fresh, so pre-seed reduced-mode auto-skips (if any) and
+      // serialize them straight into the created body. That closes the ~3s window
+      // where an all-pending body would have raced the external seed-qa writer.
+      const { state: seeded, count } = reducedPreSeed(d, emptyState());
+      const body = serializeIssueBody(d, seeded, meta(d));
       const created = await client.createIssue(d.source.owner, d.source.repo, title, body);
       setIssue(created);
       setLocalOnly(false);
       lastBody.current = created.body;
-      const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, created.number);
-      const { state: seeded, count } = reducedPreSeed(d, restored);
       setAutoSkipped(count);
       setRunState(seeded);
+      saveRunState(canonicalDocUrl(d.source), d.source.sha, created.number, seeded);
       setSyncNotice(0);
-      if (count > 0) {
-        // The fresh issue body is all-pending; push the auto-skips onto it.
-        saveRunState(canonicalDocUrl(d.source), d.source.sha, created.number, seeded);
-        dirty.current = true;
-        setSyncStatus('pending');
-        patcher.current.schedule();
-      } else {
-        setSyncStatus('synced');
-      }
+      setSyncStatus('synced');
       setCurrentIndex(firstPending(d, seeded));
       setView('run');
     } catch (e) {

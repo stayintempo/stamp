@@ -504,6 +504,22 @@ describe('reduced mode (phase 2)', () => {
     await flushEffects();
   }
 
+  it('serializes the auto-skips into the created issue body, no follow-up PATCH (fix 8)', async () => {
+    const utils = renderApp(withCoverage);
+    await startReducedRun(utils);
+    const createdBody = utils.calls.createIssue.mock.calls[0][3] as string;
+    // The created body already carries the auto-skips (CI + SEED), so there is no
+    // window where an all-pending body races the external seed-qa writer.
+    expect(createdBody).toMatch(/- \[ \] Alpha\. <!-- qa:01\.a -->/);
+    expect(createdBody).toContain('auto: machine-covered (CI)');
+    expect(createdBody).toContain('auto: machine-covered (SEED)');
+    // Beta (CHECK) is left pending, un-skipped; only the two covered boxes skip.
+    expect(createdBody).toMatch(/- \[ \] Beta\. <!-- qa:02\.b -->/);
+    expect(createdBody.match(/⏭ skipped/g)?.length).toBe(2);
+    // No follow-up PATCH is needed to add the skips.
+    expect(utils.calls.updateIssueBody).not.toHaveBeenCalled();
+  });
+
   it('a tester pass over an auto-skip is not downgraded by the reconcile flush (fix 6)', async () => {
     const utils = renderApp(withCoverage);
     await startReducedRun(utils);
