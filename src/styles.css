@@ -540,7 +540,7 @@ a {
   z-index: 20;
 }
 .overlay-panel {
-  background: var(--bg, #fff);
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: 10px;
   width: 100%;
