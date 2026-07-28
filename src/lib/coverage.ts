@@ -6,10 +6,14 @@
 //   | Sec | # | Box (short lead label) | Tag | Owner | ID |
 //
 // where Tag is one of CI SEED CHECK VISUAL BROWSER O365 OPERATOR and ID is the
-// box's stable id (`qa:NN.slug`). Reduced mode joins on exact string equality
-// between a step's stableId and the ID column. Parsing is fence- and
-// heading-aware (like scanBodyTasks) and tolerant: a missing table, or a
-// malformed row, yields no entry rather than throwing.
+// box's stable id. That ID column may hold either the full comment token a step
+// parses to (e.g. `ns:NN.slug`) or that token minus a single leading `word:`
+// namespace prefix. Some upstream repos do the latter: their docs write
+// `<!-- ns:NN.slug -->` but the ledger ID column stores `NN.slug`. Reduced mode
+// joins on exact string equality first and falls back to a namespace-stripped
+// lookup (see preSeedReduced). Parsing is fence- and heading-aware (like
+// scanBodyTasks) and tolerant: a missing table, or a malformed row, yields no
+// entry rather than throwing.
 
 import type { RunDoc } from './types';
 import { flattenSteps } from './parse';
@@ -102,7 +106,14 @@ export function preSeedReduced(
   let count = 0;
   for (const { step } of flattenSteps(doc)) {
     if (!step.stableId) continue;
-    const tag = coverage.get(step.stableId);
+    // Exact match wins; otherwise retry once with a single leading `word:`
+    // namespace prefix stripped, since some repos store the token unprefixed in
+    // the ledger ID column (comment `ns:NN.slug` -> ledger `NN.slug`).
+    let tag = coverage.get(step.stableId);
+    if (tag === undefined) {
+      const stripped = step.stableId.replace(/^[A-Za-z0-9_-]+:/, '');
+      if (stripped !== step.stableId) tag = coverage.get(stripped);
+    }
     if (!tag || !MACHINE_COVERED_TAGS.has(tag)) continue;
     if (stepState(next, step.id).status !== 'pending') continue; // never overwrite
     const seeded: StepState = { status: 'skip', note: `auto: machine-covered (${tag})` };

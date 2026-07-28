@@ -120,6 +120,10 @@ select {
   background: var(--card);
   color: var(--ink);
 }
+input[type='checkbox'] {
+  width: auto;
+  padding: 0;
+}
 textarea {
   resize: vertical;
   min-height: 60px;
