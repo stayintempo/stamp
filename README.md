@@ -64,7 +64,7 @@ STAMP treats an ordinary folder of markdown as a run. The rules:
 - **Bare:** `{owner}/{repo}` or `{owner}/{repo}/{path}` (defaults to the repo's
   default branch).
 - **Bare, pinned:** `{owner}/{repo}/{path}@{ref}`, e.g.
-  `stayintempo/tempo/QA@v1.2.0`. The ref can be a tag, a SHA, or a branch,
+  `acme/webapp/QA@v1.2.0`. The ref can be a tag, a SHA, or a branch,
   including a branch whose name contains `/` (`…/QA@fix/my-branch`).
 
 The whole run is pinned to the commit the ref resolves to, so it can't shift

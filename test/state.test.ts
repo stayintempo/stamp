@@ -220,7 +220,7 @@ describe('stable-id resume (orphan-bug regression)', () => {
   });
 });
 
-describe('seed-qa coexistence (phase 2)', () => {
+describe('external check-off coexistence (phase 2)', () => {
   const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
   const flat = flattenSteps(d);
 
@@ -234,14 +234,14 @@ describe('seed-qa coexistence (phase 2)', () => {
 
   it("a tester's explicit verdict wins over the issue side", () => {
     const local: RunState = { statuses: { a: { status: 'fail', note: 'broke' } } };
-    const issue: RunState = { statuses: { a: { status: 'pass', note: 'seeded by seed-qa @sha' } } };
+    const issue: RunState = { statuses: { a: { status: 'pass', note: 'seeded by ci-bot @sha' } } };
     expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'fail', note: 'broke' });
   });
 
   it('an auto-skip is upgraded by an issue-side check on resume', () => {
     const local: RunState = { statuses: { a: { status: 'skip', note: 'auto: machine-covered (CI)' } } };
-    const issue: RunState = { statuses: { a: { status: 'pass', note: 'qaassert green @sha' } } };
-    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass', note: 'qaassert green @sha' });
+    const issue: RunState = { statuses: { a: { status: 'pass', note: 'ci green @sha' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass', note: 'ci green @sha' });
   });
 
   it('keeps a provisional auto-skip when the issue has nothing better', () => {
@@ -256,32 +256,32 @@ describe('seed-qa coexistence (phase 2)', () => {
     expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass' });
   });
 
-  it('a seed-qa checked-with-note line survives import -> local edit -> PATCH', () => {
-    // The issue as seed-qa leaves it: box 0 checked with a provenance note.
+  it('an external checked-with-note line survives import -> local edit -> PATCH', () => {
+    // The issue as the external writer leaves it: box 0 checked with a provenance note.
     const body = [
       '## Machine QA',
       '- [x] Power on. <!-- qa:01.power -->',
-      '  - 📝 seeded by seed-qa @abc123',
+      '  - 📝 seeded by ci-bot @abc123',
       '- [ ] Brew espresso. <!-- qa:02.brew -->',
       '- [ ] Check crema.',
     ].join('\n');
 
     // Import: the note must land in local state, or the next PATCH would erase it.
     const imported = parseIssueBody(body, d);
-    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by seed-qa @abc123' });
+    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by ci-bot @abc123' });
 
     // The tester resolves a DIFFERENT box locally, then the debounced PATCH runs.
     const edited = setStep(imported, flat[2].step.id, { status: 'pass' });
     const merged = applyStateToBody(body, d, edited);
 
-    // The seed-qa evidence is preserved verbatim, not clobbered.
+    // The external evidence is preserved verbatim, not clobbered.
     expect(merged).toContain('- [x] Power on. <!-- qa:01.power -->');
-    expect(merged).toContain('📝 seeded by seed-qa @abc123');
+    expect(merged).toContain('📝 seeded by ci-bot @abc123');
     expect(merged).toMatch(/- \[x\] Check crema\./);
 
     // ...and re-parses cleanly, still carrying the note.
     const reparsed = parseIssueBody(merged, d);
-    expect(reparsed.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by seed-qa @abc123' });
+    expect(reparsed.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by ci-bot @abc123' });
   });
 
   it('a checked box keeps its pass over a stale auto-skip bullet (end-to-end body level)', () => {
@@ -295,37 +295,37 @@ describe('seed-qa coexistence (phase 2)', () => {
       '- [ ] Check crema.',
     ].join('\n');
 
-    // seed-qa runs: it flips the box to `- [x]` and appends a provenance note
-    // AFTER the old skip bullet (exactly as the seed-qa spec does), without
-    // removing the stale bullet.
-    const afterSeedQa = [
+    // The external writer runs: it flips the box to `- [x]` and appends a
+    // provenance note AFTER the old skip bullet (exactly as the external writer
+    // does), without removing the stale bullet.
+    const afterExternal = [
       '## Machine QA',
       '- [x] Power on. <!-- qa:01.power -->',
       '  - ⏭ skipped - auto: machine-covered (CI)',
-      '  - 📝 qaassert green @abc123',
+      '  - 📝 ci green @abc123',
       '- [ ] Brew espresso. <!-- qa:02.brew -->',
       '- [ ] Check crema.',
     ].join('\n');
 
-    // The checked box imports as PASS with the qaassert note, NOT as a skip.
-    const imported = parseIssueBody(afterSeedQa, d);
-    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'qaassert green @abc123' });
+    // The checked box imports as PASS with the ci note, NOT as a skip.
+    const imported = parseIssueBody(afterExternal, d);
+    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'ci green @abc123' });
 
     // Reconcile against the local auto-skip: the issue evidence upgrades it.
     const local = parseIssueBody(reduced, d);
     expect(local.statuses[flat[0].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (CI)' });
     const reconciled = reconcileResumeState(imported, local);
-    expect(reconciled.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'qaassert green @abc123' });
+    expect(reconciled.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'ci green @abc123' });
 
     // The next PATCH keeps the box checked with the note and drops the stale
     // skip bullet (no ping-pong un-check).
-    const merged = applyStateToBody(afterSeedQa, d, reconciled);
+    const merged = applyStateToBody(afterExternal, d, reconciled);
     expect(merged).toContain('- [x] Power on. <!-- qa:01.power -->');
-    expect(merged).toContain('📝 qaassert green @abc123');
+    expect(merged).toContain('📝 ci green @abc123');
     expect(merged).not.toContain('⏭ skipped');
     expect(parseIssueBody(merged, d).statuses[flat[0].step.id]).toEqual({
       status: 'pass',
-      note: 'qaassert green @abc123',
+      note: 'ci green @abc123',
     });
   });
 });

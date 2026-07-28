@@ -105,4 +105,46 @@ describe('preSeedReduced', () => {
     expect(count).toBe(0);
     expect(state).toEqual(emptyState());
   });
+
+  it('pre-seeds a step whose ledger ID drops the doc comment namespace prefix', () => {
+    // A common shape: the doc comment carries a namespace prefix (`ns:NN.slug`)
+    // but COVERAGE.md's ID column stores it unprefixed, so an exact join misses
+    // and we must fall back.
+    const src = { owner: 'acme', repo: 'webapp', ref: 'main', sha: 'tsha00002222', path: 'QA/steps.md' };
+    const steps = '# Acme QA\n\n- [ ] 🤖 auto **Reset and seed.** Wipe the dev DB. <!-- ns:00.reset-db -->\n';
+    const d = buildRunDoc(src, [{ path: 'QA/steps.md', content: steps }]);
+    const f = flattenSteps(d);
+    const cov = new Map([['00.reset-db', 'CI']]);
+    const { state, count } = preSeedReduced(d, emptyState(), cov);
+    expect(count).toBe(1);
+    expect(state.statuses[f[0].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (CI)' });
+  });
+
+  it('prefers an exact ledger ID over a namespace-stripped match when both exist', () => {
+    // step stableId is `qa:01.power`. Give the exact key and the stripped key
+    // different tags: only CI is machine-covered, so the exact hit must be used.
+    const cov = new Map([['qa:01.power', 'CI'], ['01.power', 'CHECK']]);
+    const { state, count } = preSeedReduced(doc, emptyState(), cov);
+    expect(count).toBe(1);
+    expect(state.statuses[flat[0].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (CI)' });
+  });
+
+  it('does no second lookup for a colon-less stableId, and never crosses namespaces (negative)', () => {
+    // A colon-less stableId cannot strip anything, so a non-matching ledger row
+    // seeds nothing. And `qa:x` must not reach a `qb:x` ledger entry: stripping
+    // yields `x`, which is absent, so no box is covered.
+    const src = { owner: 'acme', repo: 'q', ref: 'main', sha: 'nsha00003333', path: 'QA/steps.md' };
+    const steps = [
+      '# Negative QA',
+      '',
+      '- [ ] 🤖 auto **No namespace.** No colon in this id. <!-- nocolon -->',
+      '- [ ] 🤖 auto **Wrong namespace.** Colon but wrong prefix. <!-- qa:x -->',
+      '',
+    ].join('\n');
+    const d = buildRunDoc(src, [{ path: 'QA/steps.md', content: steps }]);
+    const cov = new Map([['other', 'CI'], ['qb:x', 'CI']]);
+    const { state, count } = preSeedReduced(d, emptyState(), cov);
+    expect(count).toBe(0);
+    expect(state).toEqual(emptyState());
+  });
 });

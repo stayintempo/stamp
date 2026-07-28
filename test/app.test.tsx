@@ -382,10 +382,10 @@ describe('flushPatch (debounced sync)', () => {
     }
   });
 
-  it('a mid-session PATCH preserves an external seed-qa check the live issue gained (fix 5)', async () => {
-    // The live issue, as seed-qa leaves it between the tester's edits: step two
+  it('a mid-session PATCH preserves an external check-off the live issue gained (fix 5)', async () => {
+    // The live issue, as the external writer leaves it between the tester's edits: step two
     // checked with a provenance note that local state has never seen.
-    const seeded = stampBody({}, '- [ ] Step one.\n- [x] Step two.\n  - 📝 seeded by seed-qa @abc');
+    const seeded = stampBody({}, '- [ ] Step one.\n- [x] Step two.\n  - 📝 seeded by ci-bot @abc');
     const utils = renderApp({
       getIssue: (n) => ({ number: n, htmlUrl: 'u', title: 't', body: seeded }),
     });
@@ -396,11 +396,11 @@ describe('flushPatch (debounced sync)', () => {
       await vi.advanceTimersByTimeAsync(3000);
       expect(utils.calls.updateIssueBody).toHaveBeenCalledTimes(1);
       const body = utils.calls.updateIssueBody.mock.calls[0][3] as string;
-      // The tester's pass lands AND the external seed-qa check survives, note intact
+      // The tester's pass lands AND the external check-off survives, note intact
       // (without the reconcile the rewrite from local state would erase step two).
       expect(body).toMatch(/- \[x\] Step one\./);
       expect(body).toMatch(/- \[x\] Step two\./);
-      expect(body).toContain('📝 seeded by seed-qa @abc');
+      expect(body).toContain('📝 seeded by ci-bot @abc');
     } finally {
       vi.useRealTimers();
     }
@@ -523,7 +523,7 @@ describe('reduced mode (phase 2)', () => {
     await startReducedRun(utils);
     const createdBody = utils.calls.createIssue.mock.calls[0][3] as string;
     // The created body already carries the auto-skips (CI + SEED), so there is no
-    // window where an all-pending body races the external seed-qa writer.
+    // window where an all-pending body races the external check-off writer.
     expect(createdBody).toMatch(/- \[ \] Alpha\. <!-- qa:01\.a -->/);
     expect(createdBody).toContain('auto: machine-covered (CI)');
     expect(createdBody).toContain('auto: machine-covered (SEED)');
