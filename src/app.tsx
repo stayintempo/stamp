@@ -154,7 +154,17 @@ export function App({ createClient }: AppProps = {}) {
     try {
       const current = await client.getIssue(d.source.owner, d.source.repo, iss.number);
       lastBody.current = current.body;
-      const merged = applyStateToBody(current.body, d, rs);
+      // Fold any external evidence the live body gained since our last write
+      // (e.g. a seed-qa check) back into local state before rewriting, so this
+      // PATCH never deletes what an external writer changed mid-session. Same
+      // precedence as resume: the tester's explicit verdicts win; external
+      // evidence upgrades a provisional pending / `auto:` pre-seed.
+      const reconciled = reconcileResumeState(parseIssueBody(current.body, d), rs);
+      if (JSON.stringify(reconciled.statuses) !== JSON.stringify(rs.statuses)) {
+        setRunState(reconciled);
+        saveRunState(canonicalDocUrl(d.source), d.source.sha, iss.number, reconciled);
+      }
+      const merged = applyStateToBody(current.body, d, reconciled);
       await client.updateIssueBody(d.source.owner, d.source.repo, iss.number, merged);
       lastBody.current = merged;
       setSyncNotice(countUnrepresentedSteps(merged, d));
@@ -217,7 +227,12 @@ export function App({ createClient }: AppProps = {}) {
       if (!client || !d || !iss) return;
       if (!dirty.current && !patcher.current.pending()) return;
       const base = lastBody.current;
-      const body = base != null ? applyStateToBody(base, d, rs) : serializeIssueBody(d, rs, meta(d));
+      // Reconcile against the last-known body so a keepalive teardown flush also
+      // preserves external evidence instead of overwriting it from local state.
+      const body =
+        base != null
+          ? applyStateToBody(base, d, reconcileResumeState(parseIssueBody(base, d), rs))
+          : serializeIssueBody(d, rs, meta(d));
       client.patchIssueBodyKeepalive(d.source.owner, d.source.repo, iss.number, body);
       dirty.current = false;
     };

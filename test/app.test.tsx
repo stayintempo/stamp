@@ -368,6 +368,30 @@ describe('flushPatch (debounced sync)', () => {
     }
   });
 
+  it('a mid-session PATCH preserves an external seed-qa check the live issue gained (fix 5)', async () => {
+    // The live issue, as seed-qa leaves it between the tester's edits: step two
+    // checked with a provenance note that local state has never seen.
+    const seeded = stampBody({}, '- [ ] Step one.\n- [x] Step two.\n  - 📝 seeded by seed-qa @abc');
+    const utils = renderApp({
+      getIssue: (n) => ({ number: n, htmlUrl: 'u', title: 't', body: seeded }),
+    });
+    await startRun(utils);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(utils.getByText('✓ Pass')); // tester passes step one -> schedules a PATCH
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(utils.calls.updateIssueBody).toHaveBeenCalledTimes(1);
+      const body = utils.calls.updateIssueBody.mock.calls[0][3] as string;
+      // The tester's pass lands AND the external seed-qa check survives, note intact
+      // (without the reconcile the rewrite from local state would erase step two).
+      expect(body).toMatch(/- \[x\] Step one\./);
+      expect(body).toMatch(/- \[x\] Step two\./);
+      expect(body).toContain('📝 seeded by seed-qa @abc');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks sync errored on a failed PATCH and retries on demand', async () => {
     let attempt = 0;
     const utils = renderApp({
