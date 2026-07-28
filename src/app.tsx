@@ -76,7 +76,7 @@ function buildNav(doc: RunDoc): NavItem[] {
   return items;
 }
 
-const emptySettings: Settings = { githubUrl: '', token: '', appHost: '' };
+const emptySettings: Settings = { githubUrl: '', token: '', appHost: '', reducedMode: false };
 
 export function App({ createClient }: AppProps = {}) {
   const makeClient = createClient ?? ((token: string | undefined) => new GithubClient({ token }));

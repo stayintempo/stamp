@@ -389,6 +389,11 @@ export interface Settings {
   githubUrl: string;
   token: string;
   appHost: string;
+  /**
+   * Reduced run: auto-skip machine-covered (CI/SEED) boxes at run start. Optional
+   * so settings saved before this feature load as `off`; absent or false is off.
+   */
+  reducedMode?: boolean;
 }
 
 const SETTINGS_KEY = 'stamp:settings';
