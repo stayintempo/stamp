@@ -250,15 +250,29 @@ function groupFromParsed(parsed: ParsedFile, filePath: string): StepGroup {
     return { id: slug(filePath), title, filePath, steps: [step] };
   }
 
-  const steps: Step[] = parsed.steps.map((s, i) => ({
-    // A stable id from the trailing comment names the box's intent and survives
-    // label/prose edits; without one, fall back to the legacy positional+hash id.
-    id: s.stableId ? `${filePath}#id:${s.stableId}` : `${filePath}#${i + 1}-${shortHash(normText(s.raw))}`,
-    ...(s.stableId ? { stableId: s.stableId } : {}),
-    label: s.label,
-    bodyMarkdown: s.body,
-    ...(s.separatorBefore ? { separatorBefore: s.separatorBefore } : {}),
-  }));
+  // Two boxes in ONE file that carry the same trailing-comment token would
+  // otherwise produce byte-identical `#id:` step ids, silently merging their
+  // RunState entries, component keys, and nav status. The FIRST occurrence keeps
+  // the id form; any later duplicate drops its stableId and falls back to the
+  // legacy positional+hash id, so the matcher's first-wins pass 1 stays honest.
+  const seenStableIds = new Set<string>();
+  const steps: Step[] = parsed.steps.map((s, i) => {
+    const stableId =
+      s.stableId !== undefined && !seenStableIds.has(s.stableId) ? s.stableId : undefined;
+    if (s.stableId !== undefined) seenStableIds.add(s.stableId);
+    return {
+      // A stable id from the trailing comment names the box's intent and survives
+      // label/prose edits; without one, fall back to the legacy positional+hash id.
+      id:
+        stableId !== undefined
+          ? `${filePath}#id:${stableId}`
+          : `${filePath}#${i + 1}-${shortHash(normText(s.raw))}`,
+      ...(stableId !== undefined ? { stableId } : {}),
+      label: s.label,
+      bodyMarkdown: s.body,
+      ...(s.separatorBefore ? { separatorBefore: s.separatorBefore } : {}),
+    };
+  });
   // Attach trailing content after the last step so it renders as a closing note.
   if (parsed.trailer && steps.length > 0) {
     steps[steps.length - 1] = { ...steps[steps.length - 1], separatorAfter: parsed.trailer };

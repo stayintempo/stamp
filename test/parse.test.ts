@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildRunDoc, parseFileSteps, extractLabel, flattenSteps } from '../src/lib/parse';
+import { setStep, stepState, emptyState } from '../src/lib/state';
 import type { Source } from '../src/lib/types';
 import {
   source,
@@ -447,6 +448,31 @@ describe('stable step ids (stamp#26)', () => {
     const idOf = (d: typeof a, i: number) => flattenSteps(d)[i].step.id;
     expect(idOf(a, 1)).toBe(idOf(b, 1)); // second box id unchanged
     expect(idOf(a, 0)).not.toBe(idOf(b, 0)); // first box id tracks its stableId
+  });
+
+  it('two boxes in ONE file sharing a token keep distinct ids (first keeps it, dup falls back)', () => {
+    // Same file, same token on both boxes. Without the per-file de-dup the two
+    // steps would collapse to a byte-identical `#id:` step id and silently share
+    // one RunState entry / component key / nav status.
+    const p = buildRunDoc(src, [
+      {
+        path: 'QA/same.md',
+        content: '# S\n- [ ] **Alpha.** a <!-- qa:01.dup -->\n- [ ] **Beta.** b <!-- qa:01.dup -->',
+      },
+    ]);
+    const flat = flattenSteps(p);
+    expect(flat).toHaveLength(2);
+    // The first box keeps the id form; the second drops stableId and uses legacy.
+    expect(flat[0].step.stableId).toBe('qa:01.dup');
+    expect(flat[0].step.id).toBe('QA/same.md#id:qa:01.dup');
+    expect(flat[1].step.stableId).toBeUndefined();
+    expect(flat[1].step.id).toMatch(/^QA\/same\.md#2-[0-9a-f]{8}$/);
+    // Distinct ids -> independent statuses (negative: not the same key).
+    expect(flat[0].step.id).not.toBe(flat[1].step.id);
+    let s = setStep(emptyState(), flat[0].step.id, { status: 'pass' });
+    s = setStep(s, flat[1].step.id, { status: 'fail', note: 'boom' });
+    expect(stepState(s, flat[0].step.id).status).toBe('pass');
+    expect(stepState(s, flat[1].step.id)).toEqual({ status: 'fail', note: 'boom' });
   });
 
   it('an id-less doc is byte-for-byte identical to today (no stableId anywhere)', () => {
