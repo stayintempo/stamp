@@ -251,7 +251,10 @@ function groupFromParsed(parsed: ParsedFile, filePath: string): StepGroup {
   }
 
   const steps: Step[] = parsed.steps.map((s, i) => ({
-    id: `${filePath}#${i + 1}-${shortHash(normText(s.raw))}`,
+    // A stable id from the trailing comment names the box's intent and survives
+    // label/prose edits; without one, fall back to the legacy positional+hash id.
+    id: s.stableId ? `${filePath}#id:${s.stableId}` : `${filePath}#${i + 1}-${shortHash(normText(s.raw))}`,
+    ...(s.stableId ? { stableId: s.stableId } : {}),
     label: s.label,
     bodyMarkdown: s.body,
     ...(s.separatorBefore ? { separatorBefore: s.separatorBefore } : {}),
