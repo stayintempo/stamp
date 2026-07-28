@@ -29,6 +29,10 @@ interface FakeOpts {
   addComment?: () => Promise<void>;
   listStampIssues?: () => Promise<IssueRef[]>;
   failResolve?: boolean;
+  /** Override the tree walk (default: a single QA/README.md). */
+  tree?: Array<{ path: string; type: string }>;
+  /** Override raw file content per path (default: the two-step MD). */
+  rawFor?: (path: string) => string;
 }
 
 /** A GithubClient stand-in exposing just the methods App exercises. */
@@ -55,8 +59,8 @@ function fakeClient(o: FakeOpts = {}) {
     // loadRunDoc dependencies
     getDefaultBranch: vi.fn(async () => (o.failResolve ? Promise.reject(new Error('boom')) : 'main')),
     resolveCommitSha: vi.fn(async () => SHA),
-    listTree: vi.fn(async () => [{ path: 'QA/README.md', type: 'blob' }]),
-    getRawFile: vi.fn(async () => MD),
+    listTree: vi.fn(async () => o.tree ?? [{ path: 'QA/README.md', type: 'blob' }]),
+    getRawFile: vi.fn(async (_o: string, _r: string, path: string) => (o.rawFor ? o.rawFor(path) : MD)),
   };
   const client = calls as unknown as GithubClient;
   return { client, calls };
@@ -79,10 +83,24 @@ async function connect(utils: ReturnType<typeof renderApp>, url = 'o/r/QA') {
 /**
  * Preact defers useEffect past the waitFor that a DOM assertion resolves on, so
  * the run screen's keyboard listener is not attached yet when the step card
- * first appears. Pump real time so the scheduled flush lands before a test
- * presses a key.
+ * first appears. Wait out Preact's own flush chain rather than a fixed delay:
+ * `afterNextFrame` registers a rAF callback (plus a 35ms timer as a fallback)
+ * and that callback schedules the flush on one more timer. A pending flush
+ * therefore registered its rAF before ours and, since jsdom runs same-frame
+ * callbacks in registration order and timers queued in the same tick fire
+ * FIFO, its flush always lands before we resolve. A fixed pump instead races
+ * the frame and loses on a busy machine, which made every keyboard test
+ * flaky (#18).
+ *
+ * The act() wrapper is load-bearing, not decoration: it captures any flush
+ * scheduled during the wait and drains it on exit, which is what covers an
+ * effect that sets state and so queues a further deferred effect. Do not
+ * reduce this to a bare promise.
  */
-const flushEffects = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+const flushEffects = () =>
+  act(async () => {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+  });
 
 /** Connect and start a brand-new issue-backed run; resolve at the run view. */
 async function startRun(utils: ReturnType<typeof renderApp>) {
@@ -112,6 +130,21 @@ describe('connect', () => {
     const utils = renderApp();
     await connect(utils);
     expect(utils.getByText(/Loaded 1 phase/)).toBeTruthy();
+  });
+
+  it('shows the ref and the pinned sha so the tester can see what they got', async () => {
+    const utils = renderApp();
+    await connect(utils);
+    expect(utils.getByText(/Loaded 1 phase/).textContent).toMatch(/pinned to\s*main\s*@\s*sha123/);
+  });
+
+  it('carries a typed @ref through to the Start panel and skips the default branch', async () => {
+    const utils = renderApp();
+    await connect(utils, 'o/r/QA@v1.2.0');
+    expect(utils.getByText(/Loaded 1 phase/).textContent).toMatch(/pinned to\s*v1\.2\.0\s*@\s*sha123/);
+    expect(utils.calls.resolveCommitSha).toHaveBeenCalledWith('o', 'r', 'v1.2.0');
+    // negative: pinning means the default branch is never consulted
+    expect(utils.calls.getDefaultBranch).not.toHaveBeenCalled();
   });
 
   it('surfaces an error and stays on setup when loading fails', async () => {
@@ -349,6 +382,30 @@ describe('flushPatch (debounced sync)', () => {
     }
   });
 
+  it('a mid-session PATCH preserves an external check-off the live issue gained (fix 5)', async () => {
+    // The live issue, as the external writer leaves it between the tester's edits: step two
+    // checked with a provenance note that local state has never seen.
+    const seeded = stampBody({}, '- [ ] Step one.\n- [x] Step two.\n  - 📝 seeded by ci-bot @abc');
+    const utils = renderApp({
+      getIssue: (n) => ({ number: n, htmlUrl: 'u', title: 't', body: seeded }),
+    });
+    await startRun(utils);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(utils.getByText('✓ Pass')); // tester passes step one -> schedules a PATCH
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(utils.calls.updateIssueBody).toHaveBeenCalledTimes(1);
+      const body = utils.calls.updateIssueBody.mock.calls[0][3] as string;
+      // The tester's pass lands AND the external check-off survives, note intact
+      // (without the reconcile the rewrite from local state would erase step two).
+      expect(body).toMatch(/- \[x\] Step one\./);
+      expect(body).toMatch(/- \[x\] Step two\./);
+      expect(body).toContain('📝 seeded by ci-bot @abc');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks sync errored on a failed PATCH and retries on demand', async () => {
     let attempt = 0;
     const utils = renderApp({
@@ -409,5 +466,124 @@ describe('summary posting (M6)', () => {
     fireEvent.click(utils.getByText(/Finish ▸/));
     fireEvent.click(await utils.findByText(/Post summary comment/));
     await waitFor(() => expect(utils.getByText(/comment rejected/)).toBeTruthy());
+  });
+});
+
+describe('reduced mode (phase 2)', () => {
+  const README =
+    '# QA\n\n- [ ] **Alpha.** a <!-- qa:01.a -->\n- [ ] **Beta.** b <!-- qa:02.b -->\n- [ ] **Gamma.** c <!-- qa:03.c -->';
+  const LEDGER = [
+    '## Per-box ledger',
+    '',
+    '| Sec | # | Box | Tag | Owner | ID |',
+    '| - | - | - | - | - | - |',
+    '| 01 | 1 | Alpha | CI | dev | qa:01.a |',
+    '| 01 | 2 | Beta | CHECK | qa | qa:02.b |',
+    '| 01 | 3 | Gamma | SEED | dev | qa:03.c |',
+  ].join('\n');
+  const withCoverage: FakeOpts = {
+    tree: [
+      { path: 'QA/README.md', type: 'blob' },
+      { path: 'QA/COVERAGE.md', type: 'blob' },
+    ],
+    rawFor: (p) => (p.includes('COVERAGE') ? LEDGER : README),
+  };
+
+  it('auto-skips CI/SEED boxes and banners the count when enabled', async () => {
+    const utils = renderApp(withCoverage);
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA' } });
+    const checkbox = utils.container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    fireEvent.click(checkbox);
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
+    fireEvent.click(utils.getByText(/Start a new run/));
+    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+    await flushEffects();
+    // qa:01.a (CI) + qa:03.c (SEED) auto-skipped = 2; qa:02.b (CHECK) untouched.
+    expect(utils.container.textContent).toMatch(/2 steps auto-skipped \(machine-covered\)/);
+    // The run lands on the first pending (non-covered) box, Beta.
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Beta');
+  });
+
+  /** Connect with reduced mode ON and start a fresh issue-backed run. */
+  async function startReducedRun(utils: ReturnType<typeof renderApp>) {
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA' } });
+    fireEvent.click(utils.container.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
+    fireEvent.click(utils.getByText(/Start a new run/));
+    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+    await flushEffects();
+  }
+
+  it('serializes the auto-skips into the created issue body, no follow-up PATCH (fix 8)', async () => {
+    const utils = renderApp(withCoverage);
+    await startReducedRun(utils);
+    const createdBody = utils.calls.createIssue.mock.calls[0][3] as string;
+    // The created body already carries the auto-skips (CI + SEED), so there is no
+    // window where an all-pending body races the external check-off writer.
+    expect(createdBody).toMatch(/- \[ \] Alpha\. <!-- qa:01\.a -->/);
+    expect(createdBody).toContain('auto: machine-covered (CI)');
+    expect(createdBody).toContain('auto: machine-covered (SEED)');
+    // Beta (CHECK) is left pending, un-skipped; only the two covered boxes skip.
+    expect(createdBody).toMatch(/- \[ \] Beta\. <!-- qa:02\.b -->/);
+    expect(createdBody.match(/⏭ skipped/g)?.length).toBe(2);
+    // No follow-up PATCH is needed to add the skips.
+    expect(utils.calls.updateIssueBody).not.toHaveBeenCalled();
+  });
+
+  it('a tester pass over an auto-skip is not downgraded by the reconcile flush (fix 6)', async () => {
+    const utils = renderApp(withCoverage);
+    await startReducedRun(utils);
+    // Lands on Beta (first pending). Step back to the auto-skipped Alpha (CI).
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() =>
+      expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha'),
+    );
+    fireEvent.keyDown(window, { key: 'p' }); // tester passes the auto-skipped box
+    // Force the teardown keepalive flush; its reconcile must keep Alpha's pass,
+    // not downgrade it to the issue-side auto-skip, and the inherited auto note
+    // must be gone (dropped when the verdict was applied).
+    window.dispatchEvent(new Event('pagehide'));
+    expect(utils.calls.patchIssueBodyKeepalive).toHaveBeenCalledTimes(1);
+    const body = utils.calls.patchIssueBodyKeepalive.mock.calls[0][3] as string;
+    expect(body).toMatch(/- \[x\] Alpha\./); // pass survives the reconcile
+    expect(body).not.toContain('machine-covered (CI)'); // Alpha's auto note dropped
+    expect(body).toContain('machine-covered (SEED)'); // Gamma still auto-skipped
+  });
+
+  it('does nothing with the toggle off, even when a ledger is present (negative)', async () => {
+    const utils = renderApp(withCoverage);
+    await startRun(utils); // connect() leaves the reduced box unchecked
+    expect(utils.queryByText(/auto-skipped/)).toBeNull();
+    // Every box is still pending: the run starts on Alpha.
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
+  });
+
+  it('resuming an existing run with reduced mode on pre-seeds nothing (fix 7 negative)', async () => {
+    // A shared full-mode run: all boxes pending, no auto-skips in the body.
+    const resumeBody = `${formatMarker(META())}\n\n## QA\n- [ ] Alpha. <!-- qa:01.a -->\n- [ ] Beta. <!-- qa:02.b -->\n- [ ] Gamma. <!-- qa:03.c -->`;
+    const utils = renderApp({
+      ...withCoverage,
+      getIssue: (n) => ({ number: n, htmlUrl: 'u', title: 't', body: resumeBody }),
+    });
+    // Connect with reduced mode ON.
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA' } });
+    fireEvent.click(utils.container.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
+    // Resume the existing run instead of starting a new one.
+    const resumeInput = utils.getByPlaceholderText('issue # or issue URL') as HTMLInputElement;
+    fireEvent.input(resumeInput, { target: { value: '9' } });
+    fireEvent.click(utils.getByText('Resume'));
+    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+    await flushEffects();
+    // No pre-seed on resume: no banner, and the run starts on the first box Alpha
+    // (nothing was auto-skipped past it), so a toggled-on resume cannot mass-skip.
+    expect(utils.queryByText(/auto-skipped/)).toBeNull();
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
   });
 });

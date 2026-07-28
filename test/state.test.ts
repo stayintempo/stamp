@@ -10,6 +10,8 @@ import {
   hasStampMarker,
   setStep,
   stepState,
+  isProvisional,
+  reconcileResumeState,
   emptyState,
   summarize,
   screenshotReference,
@@ -21,7 +23,7 @@ import {
   type RunMeta,
 } from '../src/lib/state';
 import { createDebouncer } from '../src/lib/debounce';
-import { source, dirFiles } from './fixtures';
+import { source, dirFiles, idSource, idStepsV1, idStepsV2 } from './fixtures';
 
 const doc = buildRunDoc(source, dirFiles);
 const meta: RunMeta = {
@@ -92,6 +94,239 @@ describe('serialize/parse round-trip', () => {
     const parsed = parseIssueBody(serializeIssueBody(doc, s, meta), doc);
     const flat = flattenSteps(doc);
     expect(parsed.statuses[flat[1].step.id].status).toBe('fail');
+  });
+});
+
+describe('stable-id resume (orphan-bug regression)', () => {
+  const idMeta: RunMeta = {
+    docUrl: 'acme/coffee-qa/QA/steps.md',
+    sha: idSource.sha,
+    path: idSource.path,
+    tool: 'stamp@0.1.0',
+  };
+
+  it('maps in-flight state by stable id after a step label is edited', () => {
+    const v1 = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const v2 = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV2 }]);
+    const flatV1 = flattenSteps(v1);
+    const flatV2 = flattenSteps(v2);
+
+    // Tester passes the first box on v1; the issue body records it.
+    const s1 = setStep(emptyState(), flatV1[0].step.id, { status: 'pass' });
+    const body = serializeIssueBody(v1, s1, idMeta);
+
+    // The first box's bold lead (label) is reworded in v2, same stable id.
+    // Today's exact-label matcher would orphan the pass; the id matcher keeps it.
+    const resumed = parseIssueBody(body, v2);
+    expect(resumed.statuses[flatV2[0].step.id]?.status).toBe('pass');
+  });
+
+  it('serializes the stable-id comment onto id-bearing task lines only', () => {
+    const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const body = serializeIssueBody(d, emptyState(), idMeta);
+    // id-bearing boxes carry the comment verbatim...
+    expect(body).toContain('- [ ] Power on. <!-- qa:01.power -->');
+    expect(body).toContain('- [ ] Brew espresso. <!-- qa:02.brew -->');
+    // ...the id-less third box does not (negative).
+    expect(body).toContain('- [ ] Check crema.');
+    expect(body).not.toMatch(/Check crema\..*<!--/);
+  });
+
+  it('round-trips a checked-with-comment task line back to state by id', () => {
+    const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const flat = flattenSteps(d);
+    const s = setStep(emptyState(), flat[0].step.id, { status: 'pass' });
+    const parsed = parseIssueBody(serializeIssueBody(d, s, idMeta), d);
+    expect(parsed.statuses[flat[0].step.id]).toEqual({ status: 'pass' });
+  });
+
+  it('duplicate stable ids fall back to label matching without cross-contaminating', () => {
+    // Two boxes in one doc share an id (an authoring error the contract forbids,
+    // but STAMP must degrade safely). The first box keeps the id anchor; the
+    // second is disambiguated by its distinct label rather than colliding.
+    const dup = buildRunDoc(source, [
+      { path: 'QA/README.md', content: '# Dup Phase' },
+      { path: 'QA/01-a.md', content: '# A\n- [ ] **Alpha.** box a <!-- qa:01.same -->' },
+      { path: 'QA/02-b.md', content: '# B\n- [ ] **Beta.** box b <!-- qa:01.same -->' },
+    ]);
+    const flat = flattenSteps(dup);
+    expect(flat).toHaveLength(2);
+    const dupMeta: RunMeta = { ...meta, path: 'QA' };
+    let s = emptyState();
+    s = setStep(s, flat[0].step.id, { status: 'pass' });
+    s = setStep(s, flat[1].step.id, { status: 'fail', note: 'boom' });
+    const parsed = parseIssueBody(serializeIssueBody(dup, s, dupMeta), dup);
+    expect(parsed.statuses[flat[0].step.id]?.status).toBe('pass');
+    expect(parsed.statuses[flat[1].step.id]).toEqual({ status: 'fail', note: 'boom' });
+  });
+
+  it('leaves a body task line whose --> comment is malformed untouched (body-side guard)', () => {
+    const flat = flattenSteps(doc);
+    let body = serializeIssueBody(doc, emptyState(), meta);
+    // Corrupt the first step's line with a token that swallowed the terminator.
+    body = body.replace('- [ ] Power on.', '- [x] Power on. <!-- a-->b -->');
+    const s = stateWith({ 0: { status: 'pass' } });
+    const merged = applyStateToBody(body, doc, s);
+    // The malformed token is not captured as an id, so it is not stripped off the
+    // label; the retained comment makes the label differ from "Power on." and the
+    // line stays foreign and preserved verbatim (never re-emitted to leak text).
+    expect(merged).toContain('- [x] Power on. <!-- a-->b -->');
+    expect(parseIssueBody(merged, doc).statuses[flat[0].step.id]).toBeUndefined();
+  });
+
+  it('an id-less doc serializes exactly as before (no comments emitted)', () => {
+    const legacy = serializeIssueBody(doc, emptyState(), meta);
+    expect(legacy).not.toContain('<!-- qa:');
+    // still the plain task lines
+    expect(legacy).toMatch(/- \[ \] Power on\.$/m);
+  });
+
+  it('resumes a pre-id issue body (no comments) and upgrades lines in place with the id', () => {
+    const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const flat = flattenSteps(d);
+    // An OLDER STAMP wrote this body before the doc gained ids: plain task lines,
+    // no <!-- qa:... --> comments. Box 1 passed, box 2 failed with a note.
+    const preIdBody = [
+      formatMarkerLine(),
+      '',
+      '## Machine QA',
+      '',
+      '- [x] Power on.',
+      '- [ ] Brew espresso.',
+      '  - ❌ FAIL: no beans',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // Resume maps by exact label (ids absent on the body side), so state is read.
+    const resumed = parseIssueBody(preIdBody, d);
+    expect(resumed.statuses[flat[0].step.id]?.status).toBe('pass');
+    expect(resumed.statuses[flat[1].step.id]).toEqual({ status: 'fail', note: 'no beans' });
+
+    // The next PATCH upgrades the id-bearing lines in place with the comment,
+    // with no duplication and no reordering.
+    const merged = applyStateToBody(preIdBody, d, resumed);
+    const taskLines = merged.split('\n').filter((l) => /^- \[/.test(l));
+    expect(taskLines).toEqual([
+      '- [x] Power on. <!-- qa:01.power -->',
+      '- [x] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ]);
+    // exactly one line per box (negative: no duplication)
+    expect(merged.match(/Power on\./g)?.length).toBe(1);
+    expect(merged.match(/Brew espresso\./g)?.length).toBe(1);
+    expect(merged.match(/Check crema\./g)?.length).toBe(1);
+    // the imported fail note is re-emitted (not dropped)
+    expect(merged).toContain('❌ FAIL: no beans');
+  });
+});
+
+describe('external check-off coexistence (phase 2)', () => {
+  const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+  const flat = flattenSteps(d);
+
+  it('isProvisional flags pending and auto: pre-seeds, not real verdicts', () => {
+    expect(isProvisional({ status: 'pending' })).toBe(true);
+    expect(isProvisional({ status: 'skip', note: 'auto: machine-covered (CI)' })).toBe(true);
+    expect(isProvisional({ status: 'skip' })).toBe(false);
+    expect(isProvisional({ status: 'pass', note: 'looked good' })).toBe(false);
+    expect(isProvisional({ status: 'fail', note: 'broke' })).toBe(false);
+  });
+
+  it("a tester's explicit verdict wins over the issue side", () => {
+    const local: RunState = { statuses: { a: { status: 'fail', note: 'broke' } } };
+    const issue: RunState = { statuses: { a: { status: 'pass', note: 'seeded by ci-bot @sha' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'fail', note: 'broke' });
+  });
+
+  it('an auto-skip is upgraded by an issue-side check on resume', () => {
+    const local: RunState = { statuses: { a: { status: 'skip', note: 'auto: machine-covered (CI)' } } };
+    const issue: RunState = { statuses: { a: { status: 'pass', note: 'ci green @sha' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass', note: 'ci green @sha' });
+  });
+
+  it('keeps a provisional auto-skip when the issue has nothing better', () => {
+    const local: RunState = { statuses: { a: { status: 'skip', note: 'auto: machine-covered (SEED)' } } };
+    const issue: RunState = { statuses: {} };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'skip', note: 'auto: machine-covered (SEED)' });
+  });
+
+  it('adopts an issue status for a step absent from local state', () => {
+    const local: RunState = { statuses: {} };
+    const issue: RunState = { statuses: { a: { status: 'pass' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass' });
+  });
+
+  it('an external checked-with-note line survives import -> local edit -> PATCH', () => {
+    // The issue as the external writer leaves it: box 0 checked with a provenance note.
+    const body = [
+      '## Machine QA',
+      '- [x] Power on. <!-- qa:01.power -->',
+      '  - 📝 seeded by ci-bot @abc123',
+      '- [ ] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // Import: the note must land in local state, or the next PATCH would erase it.
+    const imported = parseIssueBody(body, d);
+    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by ci-bot @abc123' });
+
+    // The tester resolves a DIFFERENT box locally, then the debounced PATCH runs.
+    const edited = setStep(imported, flat[2].step.id, { status: 'pass' });
+    const merged = applyStateToBody(body, d, edited);
+
+    // The external evidence is preserved verbatim, not clobbered.
+    expect(merged).toContain('- [x] Power on. <!-- qa:01.power -->');
+    expect(merged).toContain('📝 seeded by ci-bot @abc123');
+    expect(merged).toMatch(/- \[x\] Check crema\./);
+
+    // ...and re-parses cleanly, still carrying the note.
+    const reparsed = parseIssueBody(merged, d);
+    expect(reparsed.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by ci-bot @abc123' });
+  });
+
+  it('a checked box keeps its pass over a stale auto-skip bullet (end-to-end body level)', () => {
+    // A reduced run wrote box 0 as an auto-skip: unchecked with a `⏭ skipped`
+    // bullet carrying the provisional note.
+    const reduced = [
+      '## Machine QA',
+      '- [ ] Power on. <!-- qa:01.power -->',
+      '  - ⏭ skipped - auto: machine-covered (CI)',
+      '- [ ] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // The external writer runs: it flips the box to `- [x]` and appends a
+    // provenance note AFTER the old skip bullet (exactly as the external writer
+    // does), without removing the stale bullet.
+    const afterExternal = [
+      '## Machine QA',
+      '- [x] Power on. <!-- qa:01.power -->',
+      '  - ⏭ skipped - auto: machine-covered (CI)',
+      '  - 📝 ci green @abc123',
+      '- [ ] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // The checked box imports as PASS with the ci note, NOT as a skip.
+    const imported = parseIssueBody(afterExternal, d);
+    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'ci green @abc123' });
+
+    // Reconcile against the local auto-skip: the issue evidence upgrades it.
+    const local = parseIssueBody(reduced, d);
+    expect(local.statuses[flat[0].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (CI)' });
+    const reconciled = reconcileResumeState(imported, local);
+    expect(reconciled.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'ci green @abc123' });
+
+    // The next PATCH keeps the box checked with the note and drops the stale
+    // skip bullet (no ping-pong un-check).
+    const merged = applyStateToBody(afterExternal, d, reconciled);
+    expect(merged).toContain('- [x] Power on. <!-- qa:01.power -->');
+    expect(merged).toContain('📝 ci green @abc123');
+    expect(merged).not.toContain('⏭ skipped');
+    expect(parseIssueBody(merged, d).statuses[flat[0].step.id]).toEqual({
+      status: 'pass',
+      note: 'ci green @abc123',
+    });
   });
 });
 

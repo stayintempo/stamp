@@ -63,13 +63,20 @@ STAMP treats an ordinary folder of markdown as a run. The rules:
 - **Blob URL:** `https://github.com/{owner}/{repo}/blob/{ref}/{path}.md`.
 - **Bare:** `{owner}/{repo}` or `{owner}/{repo}/{path}` (defaults to the repo's
   default branch).
+- **Bare, pinned:** `{owner}/{repo}/{path}@{ref}`, e.g.
+  `acme/webapp/QA@v1.2.0`. The ref can be a tag, a SHA, or a branch,
+  including a branch whose name contains `/` (`…/QA@fix/my-branch`).
 
 The whole run is pinned to the commit the ref resolves to, so it can't shift
-under you mid-pass.
+under you mid-pass. Pinning to a tag or SHA is what keeps an in-flight run
+stable while the checklist itself is being edited on the default branch.
 
-> Note: for `tree`/`blob` URLs the ref is the first path segment — branch names
-> containing `/` aren't resolvable from the URL alone. Use the bare form (default
-> branch) or a tag/SHA in that case.
+> Note: the bare `@{ref}` form takes everything after the **first** `@` as the
+> ref, so a checklist path containing `@` (an npm-scoped folder, say) can't use
+> it; point at those with a tree URL. Conversely, `tree`/`blob` URLs take the
+> ref as the first path segment only, so a branch name containing `/` survives
+> there only if it is percent-encoded (`/tree/fix%2Fmy-branch/QA`), which is not
+> what you get by copying the URL out of the GitHub UI. Use `@{ref}` for those.
 
 ### How structure maps to a run
 

@@ -42,12 +42,21 @@ function nextLink(header: string | null): string | undefined {
  *   https://github.com/{o}/{r}/tree/{ref}/{path...}
  *   https://github.com/{o}/{r}/blob/{ref}/{path}.md
  *   https://github.com/{o}/{r}[/{path...}]
- *   {o}/{r}[/{path...}]              (bare, default branch)
+ *   {o}/{r}[/{path...}][@{ref}]      (bare; without @{ref}, default branch)
  * Rejects any non-github.com URL.
  *
- * NOTE: for tree/blob URLs the ref is taken as the first path segment; branch
- * names containing '/' are not resolvable from the URL alone — use the bare
- * form with the ref selected as the default branch, or a tag/sha.
+ * The bare '@{ref}' form takes everything after the FIRST '@' as the ref,
+ * verbatim, so tags, SHAs, and branch names containing '/' all work:
+ * 'o/r/QA@v1.2.0', 'o/r/QA@fix/my-branch', 'o/r/QA@stamp@0.1.0'. Owner and repo
+ * cannot contain '@' (see OWNER_REPO), so the first '@' is an unambiguous
+ * delimiter. The cost is that a checklist path containing '@' (an npm-scoped
+ * folder, say) cannot use the bare form; point at those with a tree URL.
+ *
+ * NOTE: for tree/blob URLs the ref is taken as the first path segment, so a
+ * branch name containing '/' only survives if it is percent-encoded
+ * ('/tree/fix%2Fmy-branch/QA'), which is never what the browser URL bar hands
+ * you. Prefer the bare '@{ref}' form for slash branches. Fixing the raw-slash
+ * case is issue #20.
  */
 export function parseSourceUrl(input: string): ParsedUrl {
   const raw = input.trim();
@@ -78,12 +87,27 @@ export function parseSourceUrl(input: string): ParsedUrl {
     return { owner, repo, path: segs.slice(2).join('/'), kind: 'bare' };
   }
 
-  // bare owner/repo[/path]
-  const segs = raw.replace(/^\/+|\/+$/g, '').split('/');
+  // bare owner/repo[/path][@ref]
+  const at = raw.indexOf('@');
+  // Trim around the split: the hint teaches this syntax, and a stray space
+  // would otherwise ride along invisibly as part of the path or the ref.
+  const base = (at === -1 ? raw : raw.slice(0, at)).trim();
+  const ref = at === -1 ? undefined : raw.slice(at + 1).trim();
+  if (ref === '') {
+    throw new GithubError('Nothing after the "@". Try "owner/repo/QA@v1.2.0".');
+  }
+  const segs = base.replace(/^\/+|\/+$/g, '').split('/');
   if (segs.length < 2 || !OWNER_REPO.test(segs[0]) || !OWNER_REPO.test(segs[1])) {
     throw new GithubError('Enter a github.com URL or "owner/repo".');
   }
-  return { owner: segs[0], repo: segs[1].replace(/\.git$/, ''), path: segs.slice(2).join('/'), kind: 'bare' };
+  return {
+    owner: segs[0],
+    repo: segs[1].replace(/\.git$/, ''),
+    // Spread so the no-ref case keeps its exact previous shape (no `ref` key).
+    ...(ref ? { ref } : {}),
+    path: segs.slice(2).join('/'),
+    kind: 'bare',
+  };
 }
 
 export interface GithubClientOptions {
@@ -277,7 +301,18 @@ export class GithubClient {
 export async function loadRunDoc(client: GithubClient, parsed: ParsedUrl): Promise<RunDoc> {
   const { owner, repo } = parsed;
   const ref = parsed.ref ?? (await client.getDefaultBranch(owner, repo));
-  const sha = await client.resolveCommitSha(owner, repo, ref);
+  let sha: string;
+  try {
+    sha = await client.resolveCommitSha(owner, repo, ref);
+  } catch (e) {
+    // A ref that does not exist in a repo we CAN read comes back 422, so name
+    // the ref. 404 means the repo itself is missing or unreadable, which the
+    // client already explains; let that through untouched.
+    if (e instanceof GithubError && e.status === 422) {
+      throw new GithubError(`Ref "${ref}" not found in ${owner}/${repo} (check the tag, branch, or commit).`, 422);
+    }
+    throw e;
+  }
   const path = parsed.path.replace(/^\/+|\/+$/g, '');
 
   const tree = await client.listTree(owner, repo, sha);
@@ -287,14 +322,27 @@ export async function loadRunDoc(client: GithubClient, parsed: ParsedUrl): Promi
     .map((e) => e.path)
     .filter((p) => (path === '' ? true : p === path || p.startsWith(prefix)));
 
-  if (mdPaths.length === 0) {
+  // A COVERAGE.md ledger is not a checklist: it must never become a phase. Pull
+  // it out of the phase set and fetch it separately for reduced mode. The match is
+  // on the EXACT basename `COVERAGE.md` (not case-insensitive), so a generic
+  // checklist legitimately named `coverage.md` still loads as a phase. If several
+  // exact matches exist, use the one nearest the source root (shortest path).
+  const isCoverage = (p: string): boolean => p.slice(p.lastIndexOf('/') + 1) === 'COVERAGE.md';
+  const coveragePaths = mdPaths.filter(isCoverage).sort((a, b) => a.length - b.length);
+  const phasePaths = mdPaths.filter((p) => !isCoverage(p));
+
+  if (phasePaths.length === 0) {
     throw new GithubError(`No markdown files found under "${path || '/'}".`);
   }
 
   const files: SourceFile[] = await Promise.all(
-    mdPaths.map(async (p) => ({ path: p, content: await client.getRawFile(owner, repo, p, sha) })),
+    phasePaths.map(async (p) => ({ path: p, content: await client.getRawFile(owner, repo, p, sha) })),
   );
+  const coverage = coveragePaths.length > 0
+    ? await client.getRawFile(owner, repo, coveragePaths[0], sha)
+    : undefined;
 
   const source: Source = { owner, repo, ref, sha, path };
-  return buildRunDoc(source, files);
+  const doc = buildRunDoc(source, files);
+  return coverage !== undefined ? { ...doc, coverage } : doc;
 }

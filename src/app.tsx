@@ -17,6 +17,7 @@ import {
   loadSettings,
   parseIssueBody,
   parseMarker,
+  reconcileResumeState,
   saveRunState,
   saveSettings,
   serializeIssueBody,
@@ -30,6 +31,7 @@ import {
   type StepStatus,
 } from './lib/state';
 import { createDebouncer } from './lib/debounce';
+import { parseCoverageLedger, preSeedReduced } from './lib/coverage';
 import { normalizeAppHost, suggestAppHost, type LinkContext } from './lib/links';
 import { resolveKeyAction } from './lib/keys';
 import { Markdown } from './components/Markdown';
@@ -77,7 +79,7 @@ function buildNav(doc: RunDoc): NavItem[] {
   return items;
 }
 
-const emptySettings: Settings = { githubUrl: '', token: '', appHost: '' };
+const emptySettings: Settings = { githubUrl: '', token: '', appHost: '', reducedMode: false };
 
 export function App({ createClient }: AppProps = {}) {
   const makeClient = createClient ?? ((token: string | undefined) => new GithubClient({ token }));
@@ -102,6 +104,7 @@ export function App({ createClient }: AppProps = {}) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncNotice, setSyncNotice] = useState(0);
   const [shaMismatch, setShaMismatch] = useState<IssueRef | null>(null);
+  const [autoSkipped, setAutoSkipped] = useState(0);
 
   const clientRef = useRef<GithubClient | null>(null);
   // Latest values for the debounced PATCH, which closes over stale state otherwise.
@@ -123,6 +126,20 @@ export function App({ createClient }: AppProps = {}) {
     tool: `stamp@${VERSION}`,
   });
 
+  /**
+   * Reduced-mode pre-seed: with the toggle on and the doc carrying a COVERAGE.md
+   * ledger, auto-skip every still-pending machine-covered (CI/SEED) box. Returns
+   * the seeded state and the count (0 when off or no ledger). Always applied to
+   * state that has ALREADY absorbed any imported issue/local status, so it never
+   * overwrites a real verdict.
+   */
+  function reducedPreSeed(d: RunDoc, state: RunState): { state: RunState; count: number } {
+    if (!latest.current.settings.reducedMode || !d.coverage) return { state, count: 0 };
+    const cov = parseCoverageLedger(d.coverage);
+    if (cov.size === 0) return { state, count: 0 };
+    return preSeedReduced(d, state, cov);
+  }
+
   // --- issue-body PATCH, debounced ~3s after the last change ---
   const patcher = useRef(
     createDebouncer(() => {
@@ -138,7 +155,17 @@ export function App({ createClient }: AppProps = {}) {
     try {
       const current = await client.getIssue(d.source.owner, d.source.repo, iss.number);
       lastBody.current = current.body;
-      const merged = applyStateToBody(current.body, d, rs);
+      // Fold any external evidence the live body gained since our last write
+      // (e.g. an external check-off job's check) back into local state before
+      // rewriting, so this PATCH never deletes what an external writer changed
+      // mid-session. Same precedence as resume: the tester's explicit verdicts
+      // win; external evidence upgrades a provisional pending / `auto:` pre-seed.
+      const reconciled = reconcileResumeState(parseIssueBody(current.body, d), rs);
+      if (JSON.stringify(reconciled.statuses) !== JSON.stringify(rs.statuses)) {
+        setRunState(reconciled);
+        saveRunState(canonicalDocUrl(d.source), d.source.sha, iss.number, reconciled);
+      }
+      const merged = applyStateToBody(current.body, d, reconciled);
       await client.updateIssueBody(d.source.owner, d.source.repo, iss.number, merged);
       lastBody.current = merged;
       setSyncNotice(countUnrepresentedSteps(merged, d));
@@ -201,7 +228,12 @@ export function App({ createClient }: AppProps = {}) {
       if (!client || !d || !iss) return;
       if (!dirty.current && !patcher.current.pending()) return;
       const base = lastBody.current;
-      const body = base != null ? applyStateToBody(base, d, rs) : serializeIssueBody(d, rs, meta(d));
+      // Reconcile against the last-known body so a keepalive teardown flush also
+      // preserves external evidence instead of overwriting it from local state.
+      const body =
+        base != null
+          ? applyStateToBody(base, d, reconcileResumeState(parseIssueBody(base, d), rs))
+          : serializeIssueBody(d, rs, meta(d));
       client.patchIssueBodyKeepalive(d.source.owner, d.source.repo, iss.number, body);
       dirty.current = false;
     };
@@ -276,16 +308,21 @@ export function App({ createClient }: AppProps = {}) {
     try {
       const date = new Date().toISOString().slice(0, 10);
       const title = `QA run: ${d.source.path || '/'} @ ${d.source.ref} (${date})`;
-      const body = serializeIssueBody(d, emptyState(), meta(d));
+      // A new run is always fresh, so pre-seed reduced-mode auto-skips (if any) and
+      // serialize them straight into the created body. That closes the ~3s window
+      // where an all-pending body would have raced the external check-off writer.
+      const { state: seeded, count } = reducedPreSeed(d, emptyState());
+      const body = serializeIssueBody(d, seeded, meta(d));
       const created = await client.createIssue(d.source.owner, d.source.repo, title, body);
       setIssue(created);
       setLocalOnly(false);
       lastBody.current = created.body;
-      const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, created.number);
-      setRunState(restored);
-      setSyncStatus('synced');
+      setAutoSkipped(count);
+      setRunState(seeded);
+      saveRunState(canonicalDocUrl(d.source), d.source.sha, created.number, seeded);
       setSyncNotice(0);
-      setCurrentIndex(firstPending(d, restored));
+      setSyncStatus('synced');
+      setCurrentIndex(firstPending(d, seeded));
       setView('run');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -341,12 +378,20 @@ export function App({ createClient }: AppProps = {}) {
       return false;
     }
 
-    // localStorage is the truth: if a local run exists for this (doc, sha, issue)
-    // adopt it and schedule a PATCH to bring the issue up to date; otherwise read
-    // state out of the issue body (H4b).
+    // Resume state comes from reconciling the issue body with any local run for
+    // this (doc, sha, issue): the tester's explicit local verdicts win, while
+    // external evidence in the issue (an external check-off) upgrades a provisional
+    // local auto-skip or pending. With no local run, the issue body is the state
+    // (H4b).
     const local = loadRunState(canonical, d.source.sha, found.number);
     const hasLocal = Object.keys(local.statuses).length > 0;
-    const state = hasLocal ? local : parseIssueBody(found.body, d);
+    // Read the issue body (which reflects any external check-offs) and reconcile it
+    // with local state so external evidence upgrades a provisional auto-skip while
+    // the tester's own verdicts win. Resume never pre-seeds reduced mode; that is
+    // a new-run action only, so a toggled-on resume cannot mass-skip a shared run.
+    const issueState = parseIssueBody(found.body, d);
+    const state = hasLocal ? reconcileResumeState(issueState, local) : issueState;
+    setAutoSkipped(0);
 
     setIssue(found);
     setLocalOnly(false);
@@ -356,7 +401,8 @@ export function App({ createClient }: AppProps = {}) {
     setShaMismatch(null);
     setError(undefined);
     setCurrentIndex(firstPending(d, state));
-    if (hasLocal) {
+    // Sync only when our state actually diverges from what the issue body holds.
+    if (JSON.stringify(state.statuses) !== JSON.stringify(issueState.statuses)) {
       dirty.current = true;
       setSyncStatus('pending');
       patcher.current.schedule();
@@ -375,8 +421,15 @@ export function App({ createClient }: AppProps = {}) {
     setIssue(null);
     setSyncStatus('idle');
     const restored = loadRunState(canonicalDocUrl(d.source), d.source.sha, null);
-    setRunState(restored);
-    setCurrentIndex(firstPending(d, restored));
+    // Pre-seed reduced mode only when this is a FRESH local run (no saved state);
+    // resuming an existing local run never pre-seeds, matching the new-run-only
+    // rule and the toggle's "takes effect on the next run you start" hint.
+    const fresh = Object.keys(restored.statuses).length === 0;
+    const { state: seeded, count } = fresh ? reducedPreSeed(d, restored) : { state: restored, count: 0 };
+    setAutoSkipped(count);
+    if (count > 0) saveRunState(canonicalDocUrl(d.source), d.source.sha, null, seeded);
+    setRunState(seeded);
+    setCurrentIndex(firstPending(d, seeded));
     setView('run');
   }
 
@@ -441,7 +494,11 @@ export function App({ createClient }: AppProps = {}) {
 
   function applyVerdict(status: StepStatus) {
     if (!current) return;
-    persist(setStep(runState, current.step.id, { status }));
+    // A verdict (or a manual skip) applied over a reduced-mode `auto:` pre-seed is
+    // the tester's own decision: drop the inherited provisional note so it is not
+    // mistaken for external evidence and later downgraded by a reconcile.
+    const clearsAuto = stepState(runState, current.step.id).note?.startsWith('auto:');
+    persist(setStep(runState, current.step.id, clearsAuto ? { status, note: undefined } : { status }));
     if (status === 'fail') {
       // A fail wants a note before moving on; advancing is deferred to close.
       openedForFail.current = true;
@@ -591,6 +648,7 @@ export function App({ createClient }: AppProps = {}) {
             ? { number: current.phaseNumber, count: doc.phases.length, title: current.phase.title }
             : undefined
         }
+        autoSkipped={autoSkipped}
         phasesOpen={phasesOpen}
         onOpenPhases={() => setPhasesOpen(true)}
         onRetrySync={retrySync}
@@ -702,7 +760,8 @@ function StartPanel(p: StartProps) {
         <button onClick={p.onBack}>◂ Settings</button>
       </div>
       <p class="hint">
-        Loaded {p.doc.phases.length} phase(s), pinned to <code>{p.doc.source.sha.slice(0, 7)}</code>.
+        Loaded {p.doc.phases.length} phase(s), pinned to <code>{p.doc.source.ref}</code> @{' '}
+        <code>{p.doc.source.sha.slice(0, 7)}</code>.
       </p>
       {p.error && <div class="error">{p.error}</div>}
 
