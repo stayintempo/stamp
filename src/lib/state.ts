@@ -60,6 +60,33 @@ export function setStep(state: RunState, id: string, next: Partial<StepState>): 
   return { statuses };
 }
 
+/** A local status is provisional: pending, or an `auto:` reduced-mode pre-seed. */
+export function isProvisional(st: StepState): boolean {
+  return st.status === 'pending' || (st.note?.startsWith('auto:') ?? false);
+}
+
+/**
+ * Reconcile a resumed issue's state with local state for the seed-qa coexistence
+ * rules. The tester's own explicit verdicts (any non-`auto:` local status) win,
+ * as before. Where local is only provisional (pending or an `auto:` pre-seed), a
+ * non-pending issue status is adopted so seed-qa evidence (a checked box with a
+ * `📝 seeded/qaassert` note) upgrades an auto-skip. Issue statuses for steps with
+ * no local entry are kept.
+ */
+export function reconcileResumeState(issue: RunState, local: RunState): RunState {
+  const statuses: Record<string, StepState> = { ...issue.statuses };
+  for (const [id, st] of Object.entries(local.statuses)) {
+    if (isProvisional(st)) {
+      // Keep the provisional status only when the issue side has nothing better;
+      // otherwise the issue (seed-qa evidence) wins and upgrades it.
+      if (!statuses[id]) statuses[id] = st;
+    } else {
+      statuses[id] = st; // explicit tester verdict always wins
+    }
+  }
+  return { statuses };
+}
+
 // ---------------------------------------------------------------------------
 // serialization
 // ---------------------------------------------------------------------------

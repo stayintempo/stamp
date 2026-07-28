@@ -16,6 +16,7 @@ import {
   loadSettings,
   parseIssueBody,
   parseMarker,
+  reconcileResumeState,
   saveRunState,
   saveSettings,
   serializeIssueBody,
@@ -371,7 +372,11 @@ export function App({ createClient }: AppProps = {}) {
     // state out of the issue body (H4b).
     const local = loadRunState(canonical, d.source.sha, found.number);
     const hasLocal = Object.keys(local.statuses).length > 0;
-    const imported = hasLocal ? local : parseIssueBody(found.body, d);
+    // Read the issue body (which reflects any seed-qa checks) and reconcile it
+    // with local state so seed-qa evidence upgrades a provisional auto-skip while
+    // the tester's own verdicts win; then pre-seed still-pending covered boxes.
+    const issueState = parseIssueBody(found.body, d);
+    const imported = hasLocal ? reconcileResumeState(issueState, local) : issueState;
     const { state, count } = reducedPreSeed(d, imported);
     setAutoSkipped(count);
 
@@ -383,7 +388,8 @@ export function App({ createClient }: AppProps = {}) {
     setShaMismatch(null);
     setError(undefined);
     setCurrentIndex(firstPending(d, state));
-    if (hasLocal || count > 0) {
+    // Sync only when our state actually diverges from what the issue body holds.
+    if (JSON.stringify(state.statuses) !== JSON.stringify(issueState.statuses)) {
       dirty.current = true;
       setSyncStatus('pending');
       patcher.current.schedule();
