@@ -21,7 +21,7 @@ import {
   type RunMeta,
 } from '../src/lib/state';
 import { createDebouncer } from '../src/lib/debounce';
-import { source, dirFiles } from './fixtures';
+import { source, dirFiles, idSource, idStepsV1, idStepsV2 } from './fixtures';
 
 const doc = buildRunDoc(source, dirFiles);
 const meta: RunMeta = {
@@ -92,6 +92,77 @@ describe('serialize/parse round-trip', () => {
     const parsed = parseIssueBody(serializeIssueBody(doc, s, meta), doc);
     const flat = flattenSteps(doc);
     expect(parsed.statuses[flat[1].step.id].status).toBe('fail');
+  });
+});
+
+describe('stable-id resume (orphan-bug regression)', () => {
+  const idMeta: RunMeta = {
+    docUrl: 'acme/coffee-qa/QA/steps.md',
+    sha: idSource.sha,
+    path: idSource.path,
+    tool: 'stamp@0.1.0',
+  };
+
+  it('maps in-flight state by stable id after a step label is edited', () => {
+    const v1 = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const v2 = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV2 }]);
+    const flatV1 = flattenSteps(v1);
+    const flatV2 = flattenSteps(v2);
+
+    // Tester passes the first box on v1; the issue body records it.
+    const s1 = setStep(emptyState(), flatV1[0].step.id, { status: 'pass' });
+    const body = serializeIssueBody(v1, s1, idMeta);
+
+    // The first box's bold lead (label) is reworded in v2 — same stable id.
+    // Today's exact-label matcher would orphan the pass; the id matcher keeps it.
+    const resumed = parseIssueBody(body, v2);
+    expect(resumed.statuses[flatV2[0].step.id]?.status).toBe('pass');
+  });
+
+  it('serializes the stable-id comment onto id-bearing task lines only', () => {
+    const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const body = serializeIssueBody(d, emptyState(), idMeta);
+    // id-bearing boxes carry the comment verbatim...
+    expect(body).toContain('- [ ] Power on. <!-- qa:01.power -->');
+    expect(body).toContain('- [ ] Brew espresso. <!-- qa:02.brew -->');
+    // ...the id-less third box does not (negative).
+    expect(body).toContain('- [ ] Check crema.');
+    expect(body).not.toMatch(/Check crema\..*<!--/);
+  });
+
+  it('round-trips a checked-with-comment task line back to state by id', () => {
+    const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const flat = flattenSteps(d);
+    const s = setStep(emptyState(), flat[0].step.id, { status: 'pass' });
+    const parsed = parseIssueBody(serializeIssueBody(d, s, idMeta), d);
+    expect(parsed.statuses[flat[0].step.id]).toEqual({ status: 'pass' });
+  });
+
+  it('duplicate stable ids fall back to label matching without cross-contaminating', () => {
+    // Two boxes in one doc share an id (an authoring error the contract forbids,
+    // but STAMP must degrade safely). The first box keeps the id anchor; the
+    // second is disambiguated by its distinct label rather than colliding.
+    const dup = buildRunDoc(source, [
+      { path: 'QA/README.md', content: '# Dup Phase' },
+      { path: 'QA/01-a.md', content: '# A\n- [ ] **Alpha.** box a <!-- qa:01.same -->' },
+      { path: 'QA/02-b.md', content: '# B\n- [ ] **Beta.** box b <!-- qa:01.same -->' },
+    ]);
+    const flat = flattenSteps(dup);
+    expect(flat).toHaveLength(2);
+    const dupMeta: RunMeta = { ...meta, path: 'QA' };
+    let s = emptyState();
+    s = setStep(s, flat[0].step.id, { status: 'pass' });
+    s = setStep(s, flat[1].step.id, { status: 'fail', note: 'boom' });
+    const parsed = parseIssueBody(serializeIssueBody(dup, s, dupMeta), dup);
+    expect(parsed.statuses[flat[0].step.id]?.status).toBe('pass');
+    expect(parsed.statuses[flat[1].step.id]).toEqual({ status: 'fail', note: 'boom' });
+  });
+
+  it('an id-less doc serializes exactly as before (no comments emitted)', () => {
+    const legacy = serializeIssueBody(doc, emptyState(), meta);
+    expect(legacy).not.toContain('<!-- qa:');
+    // still the plain task lines
+    expect(legacy).toMatch(/- \[ \] Power on\.$/m);
   });
 });
 

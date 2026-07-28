@@ -7,6 +7,8 @@ import {
   numericPhaseFiles,
   brewingReadme,
   cleaningReadme,
+  idSource,
+  idStepsV1,
 } from './fixtures';
 
 const src: Source = source;
@@ -387,5 +389,71 @@ describe('buildRunDoc (numeric step-group files)', () => {
     expect(filterGroup.steps).toHaveLength(1);
     expect(filterGroup.steps[0].label).toBe('Replace Filter');
     expect(filterGroup.steps[0].bodyMarkdown).toContain('every two months');
+  });
+});
+
+describe('stable step ids (stamp#26)', () => {
+  const doc = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+  const flat = flattenSteps(doc);
+
+  it('derives stableId + id from the trailing comment', () => {
+    expect(flat[0].step.stableId).toBe('qa:01.power');
+    expect(flat[0].step.id).toBe('QA/steps.md#id:qa:01.power');
+    expect(flat[1].step.stableId).toBe('qa:02.brew');
+    expect(flat[1].step.id).toBe('QA/steps.md#id:qa:02.brew');
+  });
+
+  it('leaves the label untouched by both the coverage badge and the id comment', () => {
+    // Badge prefix (🤖 auto) is before the bold lead; the comment is after the
+    // prose. Neither leaks into the label.
+    expect(flat[0].step.label).toBe('Power on.');
+    expect(flat[1].step.label).toBe('Brew espresso.');
+  });
+
+  it('strips the id comment from the rendered body markdown', () => {
+    expect(flat[0].step.bodyMarkdown).not.toContain('<!--');
+    expect(flat[0].step.bodyMarkdown).not.toContain('qa:01.power');
+    // the actual prose survives
+    expect(flat[0].step.bodyMarkdown).toContain('Flip the switch');
+  });
+
+  it('falls back to the legacy positional+hash id for a box with no comment', () => {
+    // The third box carries no trailing comment.
+    expect(flat[2].step.stableId).toBeUndefined();
+    expect(flat[2].step.id).toMatch(/^QA\/steps\.md#3-[0-9a-f]{8}$/);
+  });
+
+  it('a malformed multi-token comment is ignored: legacy id, comment left in place', () => {
+    const p = buildRunDoc(src, [
+      { path: 'QA/m.md', content: '# M\n- [ ] **A.** do it <!-- not a single token -->' },
+    ]);
+    const step = flattenSteps(p)[0].step;
+    expect(step.stableId).toBeUndefined();
+    expect(step.id).toMatch(/^QA\/m\.md#1-[0-9a-f]{8}$/);
+    // "left in place" — the non-conforming comment stays in the body text.
+    expect(step.bodyMarkdown).toContain('<!-- not a single token -->');
+  });
+
+  it('an id edit alone does not shift another box’s legacy hash id (isolation)', () => {
+    // Two boxes: the first has an id, the second does not. Changing the FIRST
+    // box’s id must not perturb the SECOND box’s positional+hash id, because
+    // the id comment is stripped before hashing.
+    const a = buildRunDoc(src, [
+      { path: 'QA/x.md', content: '# X\n- [ ] **One.** a <!-- qa:01.one -->\n- [ ] **Two.** b' },
+    ]);
+    const b = buildRunDoc(src, [
+      { path: 'QA/x.md', content: '# X\n- [ ] **One.** a <!-- qa:99.renamed -->\n- [ ] **Two.** b' },
+    ]);
+    const idOf = (d: typeof a, i: number) => flattenSteps(d)[i].step.id;
+    expect(idOf(a, 1)).toBe(idOf(b, 1)); // second box id unchanged
+    expect(idOf(a, 0)).not.toBe(idOf(b, 0)); // first box id tracks its stableId
+  });
+
+  it('an id-less doc is byte-for-byte identical to today (no stableId anywhere)', () => {
+    const legacy = buildRunDoc(src, dirFiles);
+    for (const { step } of flattenSteps(legacy)) {
+      expect(step.stableId).toBeUndefined();
+      expect(step.id).toMatch(/^QA\/.+#\d+-[0-9a-f]{8}$/);
+    }
   });
 });
