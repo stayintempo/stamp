@@ -315,8 +315,15 @@ export function parseIssueBody(body: string, doc: RunDoc): RunState {
         status = 'fail';
         note = fail[1].trim() || undefined;
       } else if (skip) {
-        status = 'skip';
-        if (skip[1]) note = skip[1].trim() || undefined;
+        // A `⏭ skipped` bullet only downgrades an UNCHECKED line. On a checked
+        // (`- [x]`) line the box is a pass (or fail); a lingering skip bullet, such
+        // as STAMP's own auto-skip that seed-qa left behind when it flipped the
+        // box, must never turn the pass back into a skip. The note, if any, comes
+        // from a later `📝` bullet.
+        if (!t.checked) {
+          status = 'skip';
+          if (skip[1]) note = skip[1].trim() || undefined;
+        }
       } else if (plain) {
         note = plain[1].trim() || undefined;
       }

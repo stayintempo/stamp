@@ -283,6 +283,51 @@ describe('seed-qa coexistence (phase 2)', () => {
     const reparsed = parseIssueBody(merged, d);
     expect(reparsed.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by seed-qa @abc123' });
   });
+
+  it('a checked box keeps its pass over a stale auto-skip bullet (end-to-end body level)', () => {
+    // A reduced run wrote box 0 as an auto-skip: unchecked with a `⏭ skipped`
+    // bullet carrying the provisional note.
+    const reduced = [
+      '## Machine QA',
+      '- [ ] Power on. <!-- qa:01.power -->',
+      '  - ⏭ skipped - auto: machine-covered (CI)',
+      '- [ ] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // seed-qa runs: it flips the box to `- [x]` and appends a provenance note
+    // AFTER the old skip bullet (exactly as the seed-qa spec does), without
+    // removing the stale bullet.
+    const afterSeedQa = [
+      '## Machine QA',
+      '- [x] Power on. <!-- qa:01.power -->',
+      '  - ⏭ skipped - auto: machine-covered (CI)',
+      '  - 📝 qaassert green @abc123',
+      '- [ ] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // The checked box imports as PASS with the qaassert note, NOT as a skip.
+    const imported = parseIssueBody(afterSeedQa, d);
+    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'qaassert green @abc123' });
+
+    // Reconcile against the local auto-skip: the issue evidence upgrades it.
+    const local = parseIssueBody(reduced, d);
+    expect(local.statuses[flat[0].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (CI)' });
+    const reconciled = reconcileResumeState(imported, local);
+    expect(reconciled.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'qaassert green @abc123' });
+
+    // The next PATCH keeps the box checked with the note and drops the stale
+    // skip bullet (no ping-pong un-check).
+    const merged = applyStateToBody(afterSeedQa, d, reconciled);
+    expect(merged).toContain('- [x] Power on. <!-- qa:01.power -->');
+    expect(merged).toContain('📝 qaassert green @abc123');
+    expect(merged).not.toContain('⏭ skipped');
+    expect(parseIssueBody(merged, d).statuses[flat[0].step.id]).toEqual({
+      status: 'pass',
+      note: 'qaassert green @abc123',
+    });
+  });
 });
 
 describe('applyStateToBody (merge onto existing body)', () => {
