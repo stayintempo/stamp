@@ -61,6 +61,11 @@ export interface RunDoc {
   /** Root README overview, shown as a collapsible preamble before phase 1. */
   preamble?: string;
   phases: Phase[];
+  /**
+   * Raw markdown of a `COVERAGE.md` ledger found under the source path, if any.
+   * Excluded from `phases` (it is not a checklist) and consumed by reduced mode.
+   */
+  coverage?: string;
 }
 
 /** A fetched markdown file: full repo path plus raw content. */

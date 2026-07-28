@@ -322,14 +322,25 @@ export async function loadRunDoc(client: GithubClient, parsed: ParsedUrl): Promi
     .map((e) => e.path)
     .filter((p) => (path === '' ? true : p === path || p.startsWith(prefix)));
 
-  if (mdPaths.length === 0) {
+  // A COVERAGE.md ledger is not a checklist: it must never become a phase. Pull
+  // it out of the phase set and fetch it separately for reduced mode. If several
+  // exist, use the one nearest the source root (shortest path).
+  const isCoverage = (p: string): boolean => p.slice(p.lastIndexOf('/') + 1).toLowerCase() === 'coverage.md';
+  const coveragePaths = mdPaths.filter(isCoverage).sort((a, b) => a.length - b.length);
+  const phasePaths = mdPaths.filter((p) => !isCoverage(p));
+
+  if (phasePaths.length === 0) {
     throw new GithubError(`No markdown files found under "${path || '/'}".`);
   }
 
   const files: SourceFile[] = await Promise.all(
-    mdPaths.map(async (p) => ({ path: p, content: await client.getRawFile(owner, repo, p, sha) })),
+    phasePaths.map(async (p) => ({ path: p, content: await client.getRawFile(owner, repo, p, sha) })),
   );
+  const coverage = coveragePaths.length > 0
+    ? await client.getRawFile(owner, repo, coveragePaths[0], sha)
+    : undefined;
 
   const source: Source = { owner, repo, ref, sha, path };
-  return buildRunDoc(source, files);
+  const doc = buildRunDoc(source, files);
+  return coverage !== undefined ? { ...doc, coverage } : doc;
 }
