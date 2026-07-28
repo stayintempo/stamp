@@ -194,6 +194,65 @@ describe('loadRunDoc (end-to-end over injected fetch)', () => {
     expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('other/thing.md'))).toBe(false);
   });
 
+  it('excludes a COVERAGE.md ledger from phases and carries it on the doc', async () => {
+    const tree = {
+      tree: [
+        { path: 'QA/README.md', type: 'blob' },
+        { path: 'QA/01_Login/README.md', type: 'blob' },
+        { path: 'QA/COVERAGE.md', type: 'blob' },
+      ],
+    };
+    const ledger = '## Per-box ledger\n\n| Sec | # | Box | Tag | Owner | ID |\n| - | - | - | - | - | - |\n| 01 | 1 | Login | CI | dev | qa:01.login |';
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
+      if (url.includes('/commits/')) return res({ sha: 'sha7' });
+      if (url.includes('/git/trees/')) return res(tree);
+      if (url.includes('QA/COVERAGE.md')) return res(null, { text: ledger });
+      if (url.includes('QA/01_Login/README.md'))
+        return res(null, { text: '# 1. Login\n\n- [ ] **Do it.** yes <!-- qa:01.login -->' });
+      if (url.includes('QA/README.md')) return res(null, { text: '# QA\n\nOverview.' });
+      throw new Error(`unexpected url ${url}`);
+    });
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA'));
+    // Exactly one phase (Login); COVERAGE.md did not become a phase.
+    expect(doc.phases).toHaveLength(1);
+    expect(doc.phases.some((p) => p.title.toLowerCase().includes('coverage'))).toBe(false);
+    // ...and the ledger is carried on the doc for reduced mode.
+    expect(doc.coverage).toContain('Per-box ledger');
+    expect(doc.coverage).toContain('qa:01.login');
+  });
+
+  it('keeps a lowercase coverage.md as a group (exact-name exclusion, fix 9)', async () => {
+    // Only the EXACT basename COVERAGE.md is the ledger; a generic checklist
+    // legitimately named coverage.md must still load as a normal file. Flat
+    // folder (no README, no numeric prefixes) so each plain .md is a group.
+    const tree = {
+      tree: [
+        { path: 'QA/checklist.md', type: 'blob' },
+        { path: 'QA/coverage.md', type: 'blob' },
+      ],
+    };
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
+      if (url.includes('/commits/')) return res({ sha: 'sha7' });
+      if (url.includes('/git/trees/')) return res(tree);
+      if (url.includes('QA/coverage.md'))
+        return res(null, { text: '# Coverage checklist\n\n- [ ] **Verify it.** yes' });
+      if (url.includes('QA/checklist.md'))
+        return res(null, { text: '# Checklist\n\n- [ ] **Do it.** yes' });
+      throw new Error(`unexpected url ${url}`);
+    });
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA'));
+    // coverage.md was NOT excluded: it is a group alongside the checklist, and
+    // nothing is carried on the doc.
+    const groups = doc.phases.flatMap((p) => p.groups.map((g) => g.filePath));
+    expect(groups).toContain('QA/coverage.md');
+    expect(groups).toContain('QA/checklist.md');
+    expect(doc.coverage).toBeUndefined();
+  });
+
   it('errors clearly when the path has no markdown', async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
@@ -203,5 +262,52 @@ describe('loadRunDoc (end-to-end over injected fetch)', () => {
     });
     const c = clientWith(fetchImpl as unknown as typeof fetch);
     await expect(loadRunDoc(c, parseSourceUrl('o/r/QA'))).rejects.toThrow(/No markdown files/);
+  });
+});
+
+describe('loadRunDoc with a pinned @ref', () => {
+  const mdTree = { tree: [{ path: 'QA/README.md', type: 'blob' }] };
+
+  function pinnedFetch(onCommits: (url: string) => Response) {
+    return vi.fn(async (url: string) => {
+      if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
+      if (url.includes('/commits/')) return onCommits(url);
+      if (url.includes('/git/trees/')) return res(mdTree);
+      if (url.includes('QA/README.md')) return res(null, { text: '# QA\n\n- [ ] **Step.** Do it.' });
+      throw new Error(`unexpected url ${url}`);
+    });
+  }
+
+  it('resolves the pinned ref and never asks for the default branch', async () => {
+    const fetchImpl = pinnedFetch(() => res({ sha: 'pinnedsha' }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@v1.2.0'));
+    expect(doc.source.ref).toBe('v1.2.0');
+    expect(doc.source.sha).toBe('pinnedsha');
+    expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/commits/v1.2.0'))).toBe(true);
+    // negative: the default-branch lookup is skipped entirely when pinned
+    expect(fetchImpl.mock.calls.some((c) => /\/repos\/[^/]+\/[^/]+$/.test(String(c[0])))).toBe(false);
+  });
+
+  it('percent-encodes a slash-containing branch ref', async () => {
+    const fetchImpl = pinnedFetch(() => res({ sha: 'branchsha' }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@fix/my-branch'));
+    expect(doc.source.ref).toBe('fix/my-branch');
+    expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('/commits/fix%2Fmy-branch'))).toBe(true);
+  });
+
+  it('names the ref when GitHub 422s it, rather than echoing the raw API error', async () => {
+    const fetchImpl = pinnedFetch(() => res({ message: 'No commit found for SHA: v9.9.9' }, { status: 422 }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await expect(loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@v9.9.9'))).rejects.toThrow(
+      /Ref "v9\.9\.9" not found in acme\/coffee-qa/,
+    );
+  });
+
+  it('leaves a 404 alone, since that means the repo is unreadable (negative)', async () => {
+    const fetchImpl = pinnedFetch(() => res({ message: 'Not Found' }, { status: 404 }));
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    await expect(loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA@v1'))).rejects.toThrow(/no access to this repo/);
   });
 });

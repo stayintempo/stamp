@@ -69,6 +69,8 @@ interface ParsedStep {
   label: string;
   body: string;
   separatorBefore?: string;
+  /** Verbatim token from a trailing `<!-- ... -->` on the box's first line. */
+  stableId?: string;
 }
 
 export interface ParsedFile {
@@ -87,6 +89,17 @@ const HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 // A top-level task item: marker at column 0, no leading whitespace.
 const TASK_RE = /^[-*+]\s+\[[ xX]\]\s+.*$/;
 const TASK_PREFIX_RE = /^[-*+]\s+\[[ xX]\]\s?/;
+// A trailing HTML comment carrying a single whitespace-free token, used as the
+// box's stable id. STAMP is generic (stamp#26): ANY such token is accepted
+// verbatim; the `qa:NN.slug` shape is a tempo-repo convention, not enforced
+// here. A comment with whitespace inside (multiple tokens) does not match and
+// is left in place, ignored, so behavior is unchanged for non-conforming docs.
+const STEP_ID_RE = /\s*<!--\s*(\S+)\s*-->\s*$/;
+// `\S+` can also swallow an embedded `-->` (e.g. `<!-- a-->b -->`); re-emitting
+// such a token would leak visible text past the first `-->` in the rendered
+// issue. Reject any captured token containing the comment terminator: the line
+// is treated as having no id and the comment is left in place.
+const isUsableIdToken = (token: string): boolean => !token.includes('-->');
 
 function trimBlankEdges(lines: string[]): string[] {
   let start = 0;
@@ -99,7 +112,17 @@ function trimBlankEdges(lines: string[]): string[] {
 function finalizeStep(stepLines: string[], separatorBefore: string | undefined): ParsedStep {
   const first = stepLines[0];
   const markerLen = first.match(TASK_PREFIX_RE)?.[0].length ?? 0;
-  const firstContent = first.slice(markerLen);
+  // A stable-id comment lives at the end of the box's FIRST physical line only.
+  // Strip it before anything derives label / body / hash from the content, so
+  // the comment never renders and an id edit alone cannot shift the legacy hash
+  // of another step's content.
+  let firstContent = first.slice(markerLen);
+  let stableId: string | undefined;
+  const idMatch = firstContent.match(STEP_ID_RE);
+  if (idMatch && isUsableIdToken(idMatch[1])) {
+    stableId = idMatch[1];
+    firstContent = firstContent.slice(0, idMatch.index).trimEnd();
+  }
   const rest = stepLines.slice(1).map((line) => {
     // Remove up to markerLen leading spaces so aligned continuations dedent to
     // the margin and shallow-nested bullets rise to the top level of the body.
@@ -108,7 +131,17 @@ function finalizeStep(stepLines: string[], separatorBefore: string | undefined):
     return line.slice(cut);
   });
   const body = trimBlankEdges([firstContent, ...rest]).join('\n');
-  return { raw: stepLines.join('\n'), label: extractLabel(firstContent), body, separatorBefore };
+  // Reconstruct the raw block with the comment stripped so the legacy hash is
+  // computed over the same text a comment-free doc would produce.
+  const rawFirst = first.slice(0, markerLen) + firstContent;
+  const raw = [rawFirst, ...stepLines.slice(1)].join('\n');
+  return {
+    raw,
+    label: extractLabel(firstContent),
+    body,
+    separatorBefore,
+    ...(stableId ? { stableId } : {}),
+  };
 }
 
 export function parseFileSteps(markdown: string): ParsedFile {
@@ -222,12 +255,29 @@ function groupFromParsed(parsed: ParsedFile, filePath: string): StepGroup {
     return { id: slug(filePath), title, filePath, steps: [step] };
   }
 
-  const steps: Step[] = parsed.steps.map((s, i) => ({
-    id: `${filePath}#${i + 1}-${shortHash(normText(s.raw))}`,
-    label: s.label,
-    bodyMarkdown: s.body,
-    ...(s.separatorBefore ? { separatorBefore: s.separatorBefore } : {}),
-  }));
+  // Two boxes in ONE file that carry the same trailing-comment token would
+  // otherwise produce byte-identical `#id:` step ids, silently merging their
+  // RunState entries, component keys, and nav status. The FIRST occurrence keeps
+  // the id form; any later duplicate drops its stableId and falls back to the
+  // legacy positional+hash id, so the matcher's first-wins pass 1 stays honest.
+  const seenStableIds = new Set<string>();
+  const steps: Step[] = parsed.steps.map((s, i) => {
+    const stableId =
+      s.stableId !== undefined && !seenStableIds.has(s.stableId) ? s.stableId : undefined;
+    if (s.stableId !== undefined) seenStableIds.add(s.stableId);
+    return {
+      // A stable id from the trailing comment names the box's intent and survives
+      // label/prose edits; without one, fall back to the legacy positional+hash id.
+      id:
+        stableId !== undefined
+          ? `${filePath}#id:${stableId}`
+          : `${filePath}#${i + 1}-${shortHash(normText(s.raw))}`,
+      ...(stableId !== undefined ? { stableId } : {}),
+      label: s.label,
+      bodyMarkdown: s.body,
+      ...(s.separatorBefore ? { separatorBefore: s.separatorBefore } : {}),
+    };
+  });
   // Attach trailing content after the last step so it renders as a closing note.
   if (parsed.trailer && steps.length > 0) {
     steps[steps.length - 1] = { ...steps[steps.length - 1], separatorAfter: parsed.trailer };

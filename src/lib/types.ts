@@ -15,8 +15,18 @@ export interface Source {
 }
 
 export interface Step {
-  /** `{filePath}#{ordinal}-{shortHash}` — stable within a doc version. */
+  /**
+   * `{filePath}#id:{stableId}` when the box carries a trailing-comment id,
+   * else `{filePath}#{ordinal}-{shortHash}`, stable within a doc version.
+   */
   id: string;
+  /**
+   * The verbatim token from the box's trailing HTML comment
+   * (`<!-- qa:02.wrong-password -->` -> `qa:02.wrong-password`), if present.
+   * Names the box's intent, so it survives label/prose edits. Optional: docs
+   * without the comment behave exactly as before.
+   */
+  stableId?: string;
   /** Short human label (first bold span or first sentence, ~80 chars). */
   label: string;
   /** Rendered-as-markdown body of the step (item content, marker stripped). */
@@ -51,6 +61,11 @@ export interface RunDoc {
   /** Root README overview, shown as a collapsible preamble before phase 1. */
   preamble?: string;
   phases: Phase[];
+  /**
+   * Raw markdown of a `COVERAGE.md` ledger found under the source path, if any.
+   * Excluded from `phases` (it is not a checklist) and consumed by reduced mode.
+   */
+  coverage?: string;
 }
 
 /** A fetched markdown file: full repo path plus raw content. */
