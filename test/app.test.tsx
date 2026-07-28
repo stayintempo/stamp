@@ -29,6 +29,10 @@ interface FakeOpts {
   addComment?: () => Promise<void>;
   listStampIssues?: () => Promise<IssueRef[]>;
   failResolve?: boolean;
+  /** Override the tree walk (default: a single QA/README.md). */
+  tree?: Array<{ path: string; type: string }>;
+  /** Override raw file content per path (default: the two-step MD). */
+  rawFor?: (path: string) => string;
 }
 
 /** A GithubClient stand-in exposing just the methods App exercises. */
@@ -55,8 +59,8 @@ function fakeClient(o: FakeOpts = {}) {
     // loadRunDoc dependencies
     getDefaultBranch: vi.fn(async () => (o.failResolve ? Promise.reject(new Error('boom')) : 'main')),
     resolveCommitSha: vi.fn(async () => SHA),
-    listTree: vi.fn(async () => [{ path: 'QA/README.md', type: 'blob' }]),
-    getRawFile: vi.fn(async () => MD),
+    listTree: vi.fn(async () => o.tree ?? [{ path: 'QA/README.md', type: 'blob' }]),
+    getRawFile: vi.fn(async (_o: string, _r: string, path: string) => (o.rawFor ? o.rawFor(path) : MD)),
   };
   const client = calls as unknown as GithubClient;
   return { client, calls };
@@ -424,5 +428,51 @@ describe('summary posting (M6)', () => {
     fireEvent.click(utils.getByText(/Finish ▸/));
     fireEvent.click(await utils.findByText(/Post summary comment/));
     await waitFor(() => expect(utils.getByText(/comment rejected/)).toBeTruthy());
+  });
+});
+
+describe('reduced mode (phase 2)', () => {
+  const README =
+    '# QA\n\n- [ ] **Alpha.** a <!-- qa:01.a -->\n- [ ] **Beta.** b <!-- qa:02.b -->\n- [ ] **Gamma.** c <!-- qa:03.c -->';
+  const LEDGER = [
+    '## Per-box ledger',
+    '',
+    '| Sec | # | Box | Tag | Owner | ID |',
+    '| - | - | - | - | - | - |',
+    '| 01 | 1 | Alpha | CI | dev | qa:01.a |',
+    '| 01 | 2 | Beta | CHECK | qa | qa:02.b |',
+    '| 01 | 3 | Gamma | SEED | dev | qa:03.c |',
+  ].join('\n');
+  const withCoverage: FakeOpts = {
+    tree: [
+      { path: 'QA/README.md', type: 'blob' },
+      { path: 'QA/COVERAGE.md', type: 'blob' },
+    ],
+    rawFor: (p) => (p.includes('COVERAGE') ? LEDGER : README),
+  };
+
+  it('auto-skips CI/SEED boxes and banners the count when enabled', async () => {
+    const utils = renderApp(withCoverage);
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA' } });
+    const checkbox = utils.container.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    fireEvent.click(checkbox);
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
+    fireEvent.click(utils.getByText(/Start a new run/));
+    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+    await flushEffects();
+    // qa:01.a (CI) + qa:03.c (SEED) auto-skipped = 2; qa:02.b (CHECK) untouched.
+    expect(utils.container.textContent).toMatch(/2 steps auto-skipped \(machine-covered\)/);
+    // The run lands on the first pending (non-covered) box, Beta.
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Beta');
+  });
+
+  it('does nothing with the toggle off, even when a ledger is present (negative)', async () => {
+    const utils = renderApp(withCoverage);
+    await startRun(utils); // connect() leaves the reduced box unchecked
+    expect(utils.queryByText(/auto-skipped/)).toBeNull();
+    // Every box is still pending: the run starts on Alpha.
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
   });
 });

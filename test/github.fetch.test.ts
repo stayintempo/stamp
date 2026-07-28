@@ -194,6 +194,35 @@ describe('loadRunDoc (end-to-end over injected fetch)', () => {
     expect(fetchImpl.mock.calls.some((c) => String(c[0]).includes('other/thing.md'))).toBe(false);
   });
 
+  it('excludes a COVERAGE.md ledger from phases and carries it on the doc', async () => {
+    const tree = {
+      tree: [
+        { path: 'QA/README.md', type: 'blob' },
+        { path: 'QA/01_Login/README.md', type: 'blob' },
+        { path: 'QA/COVERAGE.md', type: 'blob' },
+      ],
+    };
+    const ledger = '## Per-box ledger\n\n| Sec | # | Box | Tag | Owner | ID |\n| - | - | - | - | - | - |\n| 01 | 1 | Login | CI | dev | qa:01.login |';
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
+      if (url.includes('/commits/')) return res({ sha: 'sha7' });
+      if (url.includes('/git/trees/')) return res(tree);
+      if (url.includes('QA/COVERAGE.md')) return res(null, { text: ledger });
+      if (url.includes('QA/01_Login/README.md'))
+        return res(null, { text: '# 1. Login\n\n- [ ] **Do it.** yes <!-- qa:01.login -->' });
+      if (url.includes('QA/README.md')) return res(null, { text: '# QA\n\nOverview.' });
+      throw new Error(`unexpected url ${url}`);
+    });
+    const c = clientWith(fetchImpl as unknown as typeof fetch);
+    const doc = await loadRunDoc(c, parseSourceUrl('acme/coffee-qa/QA'));
+    // Exactly one phase (Login); COVERAGE.md did not become a phase.
+    expect(doc.phases).toHaveLength(1);
+    expect(doc.phases.some((p) => p.title.toLowerCase().includes('coverage'))).toBe(false);
+    // ...and the ledger is carried on the doc for reduced mode.
+    expect(doc.coverage).toContain('Per-box ledger');
+    expect(doc.coverage).toContain('qa:01.login');
+  });
+
   it('errors clearly when the path has no markdown', async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });

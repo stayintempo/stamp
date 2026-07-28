@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { parseCoverageLedger } from '../src/lib/coverage';
+import { parseCoverageLedger, preSeedReduced, MACHINE_COVERED_TAGS } from '../src/lib/coverage';
+import { buildRunDoc, flattenSteps } from '../src/lib/parse';
+import { emptyState, setStep } from '../src/lib/state';
+import { idSource, idStepsV1 } from './fixtures';
 
 const LEDGER = `# Coverage
 
@@ -64,5 +67,42 @@ describe('parseCoverageLedger', () => {
     const m = parseCoverageLedger(md);
     expect(m.has('qa:01.fenced')).toBe(false);
     expect(m.get('qa:01.real')).toBe('SEED');
+  });
+});
+
+describe('preSeedReduced', () => {
+  // idStepsV1 boxes: qa:01.power, qa:02.brew, and a third with no id.
+  const doc = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+  const flat = flattenSteps(doc);
+
+  it('treats only CI and SEED as machine-covered', () => {
+    expect([...MACHINE_COVERED_TAGS].sort()).toEqual(['CI', 'SEED']);
+  });
+
+  it('auto-skips only CI/SEED boxes, tagging the note with the provenance', () => {
+    // qa:01.power = CI (covered), qa:02.brew = CHECK (not covered).
+    const cov = new Map([['qa:01.power', 'CI'], ['qa:02.brew', 'CHECK']]);
+    const { state, count } = preSeedReduced(doc, emptyState(), cov);
+    expect(count).toBe(1);
+    expect(state.statuses[flat[0].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (CI)' });
+    // CHECK box and the id-less third box are untouched (negative).
+    expect(state.statuses[flat[1].step.id]).toBeUndefined();
+    expect(state.statuses[flat[2].step.id]).toBeUndefined();
+  });
+
+  it('never overwrites a step that already has a status', () => {
+    const seeded0 = setStep(emptyState(), flat[0].step.id, { status: 'pass' });
+    const cov = new Map([['qa:01.power', 'CI'], ['qa:02.brew', 'SEED']]);
+    const { state, count } = preSeedReduced(doc, seeded0, cov);
+    // box 0 already passed -> left alone; box 1 (SEED, pending) -> auto-skipped.
+    expect(state.statuses[flat[0].step.id]).toEqual({ status: 'pass' });
+    expect(state.statuses[flat[1].step.id]).toEqual({ status: 'skip', note: 'auto: machine-covered (SEED)' });
+    expect(count).toBe(1);
+  });
+
+  it('an empty coverage map is a no-op', () => {
+    const { state, count } = preSeedReduced(doc, emptyState(), new Map());
+    expect(count).toBe(0);
+    expect(state).toEqual(emptyState());
   });
 });

@@ -10,6 +10,8 @@ import {
   hasStampMarker,
   setStep,
   stepState,
+  isProvisional,
+  reconcileResumeState,
   emptyState,
   summarize,
   screenshotReference,
@@ -215,6 +217,71 @@ describe('stable-id resume (orphan-bug regression)', () => {
     expect(merged.match(/Check crema\./g)?.length).toBe(1);
     // the imported fail note is re-emitted (not dropped)
     expect(merged).toContain('❌ FAIL: no beans');
+  });
+});
+
+describe('seed-qa coexistence (phase 2)', () => {
+  const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+  const flat = flattenSteps(d);
+
+  it('isProvisional flags pending and auto: pre-seeds, not real verdicts', () => {
+    expect(isProvisional({ status: 'pending' })).toBe(true);
+    expect(isProvisional({ status: 'skip', note: 'auto: machine-covered (CI)' })).toBe(true);
+    expect(isProvisional({ status: 'skip' })).toBe(false);
+    expect(isProvisional({ status: 'pass', note: 'looked good' })).toBe(false);
+    expect(isProvisional({ status: 'fail', note: 'broke' })).toBe(false);
+  });
+
+  it("a tester's explicit verdict wins over the issue side", () => {
+    const local: RunState = { statuses: { a: { status: 'fail', note: 'broke' } } };
+    const issue: RunState = { statuses: { a: { status: 'pass', note: 'seeded by seed-qa @sha' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'fail', note: 'broke' });
+  });
+
+  it('an auto-skip is upgraded by an issue-side check on resume', () => {
+    const local: RunState = { statuses: { a: { status: 'skip', note: 'auto: machine-covered (CI)' } } };
+    const issue: RunState = { statuses: { a: { status: 'pass', note: 'qaassert green @sha' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass', note: 'qaassert green @sha' });
+  });
+
+  it('keeps a provisional auto-skip when the issue has nothing better', () => {
+    const local: RunState = { statuses: { a: { status: 'skip', note: 'auto: machine-covered (SEED)' } } };
+    const issue: RunState = { statuses: {} };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'skip', note: 'auto: machine-covered (SEED)' });
+  });
+
+  it('adopts an issue status for a step absent from local state', () => {
+    const local: RunState = { statuses: {} };
+    const issue: RunState = { statuses: { a: { status: 'pass' } } };
+    expect(reconcileResumeState(issue, local).statuses.a).toEqual({ status: 'pass' });
+  });
+
+  it('a seed-qa checked-with-note line survives import -> local edit -> PATCH', () => {
+    // The issue as seed-qa leaves it: box 0 checked with a provenance note.
+    const body = [
+      '## Machine QA',
+      '- [x] Power on. <!-- qa:01.power -->',
+      '  - 📝 seeded by seed-qa @abc123',
+      '- [ ] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // Import: the note must land in local state, or the next PATCH would erase it.
+    const imported = parseIssueBody(body, d);
+    expect(imported.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by seed-qa @abc123' });
+
+    // The tester resolves a DIFFERENT box locally, then the debounced PATCH runs.
+    const edited = setStep(imported, flat[2].step.id, { status: 'pass' });
+    const merged = applyStateToBody(body, d, edited);
+
+    // The seed-qa evidence is preserved verbatim, not clobbered.
+    expect(merged).toContain('- [x] Power on. <!-- qa:01.power -->');
+    expect(merged).toContain('📝 seeded by seed-qa @abc123');
+    expect(merged).toMatch(/- \[x\] Check crema\./);
+
+    // ...and re-parses cleanly, still carrying the note.
+    const reparsed = parseIssueBody(merged, d);
+    expect(reparsed.statuses[flat[0].step.id]).toEqual({ status: 'pass', note: 'seeded by seed-qa @abc123' });
   });
 });
 
