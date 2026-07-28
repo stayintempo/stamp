@@ -495,4 +495,16 @@ describe('stable step ids (stamp#26)', () => {
       expect(step.id).toMatch(/^QA\/.+#\d+-[0-9a-f]{8}$/);
     }
   });
+
+  it('pins the exact legacy id of an id-less box (hash-input perturbation fails loudly)', () => {
+    // The shape-only assertions above pass even if the hash input silently
+    // shifts. Pin the FNV-1a literal for the third (id-less) box of idStepsV1:
+    // computed once over its normalized raw `- [ ] **Check crema.** ...`. Because
+    // it sits below two id-bearing boxes, this also proves stripping their id
+    // comments does not perturb an id-less box's positional+hash identity.
+    const doc = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const flat = flattenSteps(doc);
+    expect(flat[2].step.stableId).toBeUndefined();
+    expect(flat[2].step.id).toBe('QA/steps.md#3-0f59c973');
+  });
 });

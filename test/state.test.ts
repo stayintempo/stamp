@@ -178,6 +178,44 @@ describe('stable-id resume (orphan-bug regression)', () => {
     // still the plain task lines
     expect(legacy).toMatch(/- \[ \] Power on\.$/m);
   });
+
+  it('resumes a pre-id issue body (no comments) and upgrades lines in place with the id', () => {
+    const d = buildRunDoc(idSource, [{ path: 'QA/steps.md', content: idStepsV1 }]);
+    const flat = flattenSteps(d);
+    // An OLDER STAMP wrote this body before the doc gained ids: plain task lines,
+    // no <!-- qa:... --> comments. Box 1 passed, box 2 failed with a note.
+    const preIdBody = [
+      formatMarkerLine(),
+      '',
+      '## Machine QA',
+      '',
+      '- [x] Power on.',
+      '- [ ] Brew espresso.',
+      '  - ❌ FAIL: no beans',
+      '- [ ] Check crema.',
+    ].join('\n');
+
+    // Resume maps by exact label (ids absent on the body side), so state is read.
+    const resumed = parseIssueBody(preIdBody, d);
+    expect(resumed.statuses[flat[0].step.id]?.status).toBe('pass');
+    expect(resumed.statuses[flat[1].step.id]).toEqual({ status: 'fail', note: 'no beans' });
+
+    // The next PATCH upgrades the id-bearing lines in place with the comment,
+    // with no duplication and no reordering.
+    const merged = applyStateToBody(preIdBody, d, resumed);
+    const taskLines = merged.split('\n').filter((l) => /^- \[/.test(l));
+    expect(taskLines).toEqual([
+      '- [x] Power on. <!-- qa:01.power -->',
+      '- [x] Brew espresso. <!-- qa:02.brew -->',
+      '- [ ] Check crema.',
+    ]);
+    // exactly one line per box (negative: no duplication)
+    expect(merged.match(/Power on\./g)?.length).toBe(1);
+    expect(merged.match(/Brew espresso\./g)?.length).toBe(1);
+    expect(merged.match(/Check crema\./g)?.length).toBe(1);
+    // the imported fail note is re-emitted (not dropped)
+    expect(merged).toContain('❌ FAIL: no beans');
+  });
 });
 
 describe('applyStateToBody (merge onto existing body)', () => {
