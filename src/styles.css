@@ -517,6 +517,15 @@ a {
   font-size: 13px;
 }
 
+.reduced-banner {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--informational-bg);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
 /* ---- settings overlay ---- */
 
 .overlay {

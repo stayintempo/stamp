@@ -16,6 +16,7 @@ export function SetupScreen({ initial, busy, error, onConnect, onClearToken }: P
   const [githubUrl, setGithubUrl] = useState(initial.githubUrl);
   const [token, setToken] = useState(initial.token);
   const [appHost, setAppHost] = useState(initial.appHost);
+  const [reducedMode, setReducedMode] = useState(!!initial.reducedMode);
 
   const clearToken = () => {
     setToken('');
@@ -40,7 +41,7 @@ export function SetupScreen({ initial, busy, error, onConnect, onClearToken }: P
         class="stack"
         onSubmit={(e) => {
           e.preventDefault();
-          onConnect({ githubUrl: githubUrl.trim(), token: token.trim(), appHost: appHost.trim() });
+          onConnect({ githubUrl: githubUrl.trim(), token: token.trim(), appHost: appHost.trim(), reducedMode });
         }}
       >
         <div class="field">
@@ -94,6 +95,21 @@ export function SetupScreen({ initial, busy, error, onConnect, onClearToken }: P
             placeholder="app.example.com"
           />
           <p class="hint">Links to this host open in one reusable tab beside STAMP. Auto-suggested from the doc.</p>
+        </div>
+
+        <div class="field">
+          <label class="row" style={{ gap: '8px', alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={reducedMode}
+              onChange={(e) => setReducedMode((e.target as HTMLInputElement).checked)}
+            />
+            Reduced run: auto-skip machine-covered steps
+          </label>
+          <p class="hint">
+            When the checklist ships a <code>COVERAGE.md</code> ledger, boxes tagged CI or SEED start
+            auto-skipped. You can un-skip any of them.
+          </p>
         </div>
 
         <button class="primary" type="submit" disabled={busy}>

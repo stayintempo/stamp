@@ -33,13 +33,14 @@ export function SettingsOverlay({
   const [githubUrl, setGithubUrl] = useState(initial.githubUrl);
   const [token, setToken] = useState(initial.token);
   const [appHost, setAppHost] = useState(initial.appHost);
+  const [reducedMode, setReducedMode] = useState(!!initial.reducedMode);
   const [confirmReconnect, setConfirmReconnect] = useState(false);
 
   const urlChanged = githubUrl.trim() !== currentUrl.trim();
 
   const submit = (e: Event) => {
     e.preventDefault();
-    const s: Settings = { githubUrl: githubUrl.trim(), token: token.trim(), appHost: appHost.trim() };
+    const s: Settings = { githubUrl: githubUrl.trim(), token: token.trim(), appHost: appHost.trim(), reducedMode };
     if (!urlChanged) {
       onApplyInPlace(s);
       return;
@@ -112,6 +113,18 @@ export function SettingsOverlay({
               onInput={(e) => setAppHost((e.target as HTMLInputElement).value)}
               placeholder="app.example.com"
             />
+          </div>
+
+          <div class="field">
+            <label class="row" style={{ gap: '8px', alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={reducedMode}
+                onChange={(e) => setReducedMode((e.target as HTMLInputElement).checked)}
+              />
+              Reduced run: auto-skip machine-covered steps
+            </label>
+            <p class="hint">Takes effect on the next run you start.</p>
           </div>
 
           <div class="row" style={{ justifyContent: 'flex-end', gap: '8px' }}>

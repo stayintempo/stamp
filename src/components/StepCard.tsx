@@ -116,7 +116,9 @@ export function StepCard(props: Props) {
         open={props.noteOpen}
         title={status === 'fail' ? 'Note the failure' : 'Step note'}
         hint={status === 'fail' ? 'A note is encouraged so the failure is actionable.' : undefined}
-        initial={note ?? ''}
+        // Never prefill a machine `auto:` pre-seed note as editable text; it is a
+        // provenance marker, not the tester's note.
+        initial={note && !note.startsWith('auto:') ? note : ''}
         onSave={(n) => {
           props.onNote(n);
           props.onCloseNote();

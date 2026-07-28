@@ -60,6 +60,33 @@ export function setStep(state: RunState, id: string, next: Partial<StepState>): 
   return { statuses };
 }
 
+/** A local status is provisional: pending, or an `auto:` reduced-mode pre-seed. */
+export function isProvisional(st: StepState): boolean {
+  return st.status === 'pending' || (st.note?.startsWith('auto:') ?? false);
+}
+
+/**
+ * Reconcile a resumed issue's state with local state for the seed-qa coexistence
+ * rules. The tester's own explicit verdicts (any non-`auto:` local status) win,
+ * as before. Where local is only provisional (pending or an `auto:` pre-seed), a
+ * non-pending issue status is adopted so seed-qa evidence (a checked box with a
+ * `📝 seeded/qaassert` note) upgrades an auto-skip. Issue statuses for steps with
+ * no local entry are kept.
+ */
+export function reconcileResumeState(issue: RunState, local: RunState): RunState {
+  const statuses: Record<string, StepState> = { ...issue.statuses };
+  for (const [id, st] of Object.entries(local.statuses)) {
+    if (isProvisional(st)) {
+      // Keep the provisional status only when the issue side has nothing better;
+      // otherwise the issue (seed-qa evidence) wins and upgrades it.
+      if (!statuses[id]) statuses[id] = st;
+    } else {
+      statuses[id] = st; // explicit tester verdict always wins
+    }
+  }
+  return { statuses };
+}
+
 // ---------------------------------------------------------------------------
 // serialization
 // ---------------------------------------------------------------------------
@@ -165,7 +192,7 @@ function scanBodyTasks(lines: string[]): BodyTask[] {
  *
  *  1. By STABLE ID: a doc step with a stableId claims the body task carrying the
  *     same id (exact string equality). This is what survives a label/prose edit
- *     of the box — the fix for the resume-orphan bug. Only the FIRST doc step
+ *     of the box, the fix for the resume-orphan bug. Only the FIRST doc step
  *     with a given id matches by id; any later duplicate falls through to the
  *     label pass, so a non-unique id can never silently mis-map the rest.
  *  2. By EXACT label (the long-standing fallback), over the steps and body tasks
@@ -288,8 +315,15 @@ export function parseIssueBody(body: string, doc: RunDoc): RunState {
         status = 'fail';
         note = fail[1].trim() || undefined;
       } else if (skip) {
-        status = 'skip';
-        if (skip[1]) note = skip[1].trim() || undefined;
+        // A `⏭ skipped` bullet only downgrades an UNCHECKED line. On a checked
+        // (`- [x]`) line the box is a pass (or fail); a lingering skip bullet, such
+        // as STAMP's own auto-skip that seed-qa left behind when it flipped the
+        // box, must never turn the pass back into a skip. The note, if any, comes
+        // from a later `📝` bullet.
+        if (!t.checked) {
+          status = 'skip';
+          if (skip[1]) note = skip[1].trim() || undefined;
+        }
       } else if (plain) {
         note = plain[1].trim() || undefined;
       }
@@ -389,6 +423,11 @@ export interface Settings {
   githubUrl: string;
   token: string;
   appHost: string;
+  /**
+   * Reduced run: auto-skip machine-covered (CI/SEED) boxes at run start. Optional
+   * so settings saved before this feature load as `off`; absent or false is off.
+   */
+  reducedMode?: boolean;
 }
 
 const SETTINGS_KEY = 'stamp:settings';
