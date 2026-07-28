@@ -492,6 +492,38 @@ describe('reduced mode (phase 2)', () => {
     expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Beta');
   });
 
+  /** Connect with reduced mode ON and start a fresh issue-backed run. */
+  async function startReducedRun(utils: ReturnType<typeof renderApp>) {
+    const input = utils.container.querySelector('#gh') as HTMLInputElement;
+    fireEvent.input(input, { target: { value: 'o/r/QA' } });
+    fireEvent.click(utils.container.querySelector('input[type="checkbox"]') as HTMLInputElement);
+    fireEvent.submit(input.closest('form')!);
+    await waitFor(() => expect(utils.getByText(/Start a new run/)).toBeTruthy());
+    fireEvent.click(utils.getByText(/Start a new run/));
+    await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
+    await flushEffects();
+  }
+
+  it('a tester pass over an auto-skip is not downgraded by the reconcile flush (fix 6)', async () => {
+    const utils = renderApp(withCoverage);
+    await startReducedRun(utils);
+    // Lands on Beta (first pending). Step back to the auto-skipped Alpha (CI).
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    await waitFor(() =>
+      expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha'),
+    );
+    fireEvent.keyDown(window, { key: 'p' }); // tester passes the auto-skipped box
+    // Force the teardown keepalive flush; its reconcile must keep Alpha's pass,
+    // not downgrade it to the issue-side auto-skip, and the inherited auto note
+    // must be gone (dropped when the verdict was applied).
+    window.dispatchEvent(new Event('pagehide'));
+    expect(utils.calls.patchIssueBodyKeepalive).toHaveBeenCalledTimes(1);
+    const body = utils.calls.patchIssueBodyKeepalive.mock.calls[0][3] as string;
+    expect(body).toMatch(/- \[x\] Alpha\./); // pass survives the reconcile
+    expect(body).not.toContain('machine-covered (CI)'); // Alpha's auto note dropped
+    expect(body).toContain('machine-covered (SEED)'); // Gamma still auto-skipped
+  });
+
   it('does nothing with the toggle off, even when a ledger is present (negative)', async () => {
     const utils = renderApp(withCoverage);
     await startRun(utils); // connect() leaves the reduced box unchecked

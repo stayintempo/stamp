@@ -492,7 +492,11 @@ export function App({ createClient }: AppProps = {}) {
 
   function applyVerdict(status: StepStatus) {
     if (!current) return;
-    persist(setStep(runState, current.step.id, { status }));
+    // A verdict (or a manual skip) applied over a reduced-mode `auto:` pre-seed is
+    // the tester's own decision: drop the inherited provisional note so it is not
+    // mistaken for seed-qa evidence and later downgraded by a reconcile.
+    const clearsAuto = stepState(runState, current.step.id).note?.startsWith('auto:');
+    persist(setStep(runState, current.step.id, clearsAuto ? { status, note: undefined } : { status }));
     if (status === 'fail') {
       // A fail wants a note before moving on; advancing is deferred to close.
       openedForFail.current = true;
