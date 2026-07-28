@@ -66,19 +66,24 @@ export function setStep(state: RunState, id: string, next: Partial<StepState>): 
 
 const flattenNote = (note: string): string => note.replace(/\s*\n\s*/g, ' ').trim();
 
-/** The step line + its note sub-bullets for a given state. */
-export function renderStepLines(label: string, st: StepState): string[] {
+/**
+ * The step line + its note sub-bullets for a given state. When the step has a
+ * stable id, append it as a trailing HTML comment on the task line so resume can
+ * match by id (invisible in GitHub's rendered issue, so the tester sees nothing).
+ */
+export function renderStepLines(label: string, st: StepState, stableId?: string): string[] {
   const note = st.note ? flattenNote(st.note) : '';
+  const task = `${label}${stableId ? ` <!-- ${stableId} -->` : ''}`;
   switch (st.status) {
     case 'pass':
-      return note ? [`- [x] ${label}`, `  - 📝 ${note}`] : [`- [x] ${label}`];
+      return note ? [`- [x] ${task}`, `  - 📝 ${note}`] : [`- [x] ${task}`];
     case 'fail':
-      return [`- [x] ${label}`, `  - ❌ FAIL: ${note}`];
+      return [`- [x] ${task}`, `  - ❌ FAIL: ${note}`];
     case 'skip':
-      return [`- [ ] ${label}`, note ? `  - ⏭ skipped — ${note}` : `  - ⏭ skipped`];
+      return [`- [ ] ${task}`, note ? `  - ⏭ skipped — ${note}` : `  - ⏭ skipped`];
     case 'pending':
     default:
-      return note ? [`- [ ] ${label}`, `  - 📝 ${note}`] : [`- [ ] ${label}`];
+      return note ? [`- [ ] ${task}`, `  - 📝 ${note}`] : [`- [ ] ${task}`];
   }
 }
 
@@ -94,7 +99,7 @@ export function serializeIssueBody(doc: RunDoc, state: RunState, meta: RunMeta):
     out.push(`## ${phase.title}${phase.badge ? ` [${phase.badge}]` : ''}`, '');
     for (const group of phase.groups) {
       for (const step of group.steps) {
-        out.push(...renderStepLines(step.label, stepState(state, step.id)));
+        out.push(...renderStepLines(step.label, stepState(state, step.id), step.stableId));
       }
     }
     out.push('');
