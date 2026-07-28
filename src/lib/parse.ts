@@ -69,6 +69,8 @@ interface ParsedStep {
   label: string;
   body: string;
   separatorBefore?: string;
+  /** Verbatim token from a trailing `<!-- ... -->` on the box's first line. */
+  stableId?: string;
 }
 
 export interface ParsedFile {
@@ -87,6 +89,12 @@ const HEADING_RE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
 // A top-level task item: marker at column 0, no leading whitespace.
 const TASK_RE = /^[-*+]\s+\[[ xX]\]\s+.*$/;
 const TASK_PREFIX_RE = /^[-*+]\s+\[[ xX]\]\s?/;
+// A trailing HTML comment carrying a single whitespace-free token, used as the
+// box's stable id. STAMP is generic (stamp#26): ANY such token is accepted
+// verbatim — the `qa:NN.slug` shape is a tempo-repo convention, not enforced
+// here. A comment with whitespace inside (multiple tokens) does not match and
+// is left in place, ignored, so behavior is unchanged for non-conforming docs.
+const STEP_ID_RE = /\s*<!--\s*(\S+)\s*-->\s*$/;
 
 function trimBlankEdges(lines: string[]): string[] {
   let start = 0;
@@ -99,7 +107,17 @@ function trimBlankEdges(lines: string[]): string[] {
 function finalizeStep(stepLines: string[], separatorBefore: string | undefined): ParsedStep {
   const first = stepLines[0];
   const markerLen = first.match(TASK_PREFIX_RE)?.[0].length ?? 0;
-  const firstContent = first.slice(markerLen);
+  // A stable-id comment lives at the end of the box's FIRST physical line only.
+  // Strip it before anything derives label / body / hash from the content, so
+  // the comment never renders and an id edit alone cannot shift the legacy hash
+  // of another step's content.
+  let firstContent = first.slice(markerLen);
+  let stableId: string | undefined;
+  const idMatch = firstContent.match(STEP_ID_RE);
+  if (idMatch) {
+    stableId = idMatch[1];
+    firstContent = firstContent.slice(0, idMatch.index).trimEnd();
+  }
   const rest = stepLines.slice(1).map((line) => {
     // Remove up to markerLen leading spaces so aligned continuations dedent to
     // the margin and shallow-nested bullets rise to the top level of the body.
@@ -108,7 +126,17 @@ function finalizeStep(stepLines: string[], separatorBefore: string | undefined):
     return line.slice(cut);
   });
   const body = trimBlankEdges([firstContent, ...rest]).join('\n');
-  return { raw: stepLines.join('\n'), label: extractLabel(firstContent), body, separatorBefore };
+  // Reconstruct the raw block with the comment stripped so the legacy hash is
+  // computed over the same text a comment-free doc would produce.
+  const rawFirst = first.slice(0, markerLen) + firstContent;
+  const raw = [rawFirst, ...stepLines.slice(1)].join('\n');
+  return {
+    raw,
+    label: extractLabel(firstContent),
+    body,
+    separatorBefore,
+    ...(stableId ? { stableId } : {}),
+  };
 }
 
 export function parseFileSteps(markdown: string): ParsedFile {
