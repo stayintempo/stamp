@@ -66,19 +66,24 @@ export function setStep(state: RunState, id: string, next: Partial<StepState>): 
 
 const flattenNote = (note: string): string => note.replace(/\s*\n\s*/g, ' ').trim();
 
-/** The step line + its note sub-bullets for a given state. */
-export function renderStepLines(label: string, st: StepState): string[] {
+/**
+ * The step line + its note sub-bullets for a given state. When the step has a
+ * stable id, append it as a trailing HTML comment on the task line so resume can
+ * match by id (invisible in GitHub's rendered issue, so the tester sees nothing).
+ */
+export function renderStepLines(label: string, st: StepState, stableId?: string): string[] {
   const note = st.note ? flattenNote(st.note) : '';
+  const task = `${label}${stableId ? ` <!-- ${stableId} -->` : ''}`;
   switch (st.status) {
     case 'pass':
-      return note ? [`- [x] ${label}`, `  - 📝 ${note}`] : [`- [x] ${label}`];
+      return note ? [`- [x] ${task}`, `  - 📝 ${note}`] : [`- [x] ${task}`];
     case 'fail':
-      return [`- [x] ${label}`, `  - ❌ FAIL: ${note}`];
+      return [`- [x] ${task}`, `  - ❌ FAIL: ${note}`];
     case 'skip':
-      return [`- [ ] ${label}`, note ? `  - ⏭ skipped — ${note}` : `  - ⏭ skipped`];
+      return [`- [ ] ${task}`, note ? `  - ⏭ skipped — ${note}` : `  - ⏭ skipped`];
     case 'pending':
     default:
-      return note ? [`- [ ] ${label}`, `  - 📝 ${note}`] : [`- [ ] ${label}`];
+      return note ? [`- [ ] ${task}`, `  - 📝 ${note}`] : [`- [ ] ${task}`];
   }
 }
 
@@ -94,7 +99,7 @@ export function serializeIssueBody(doc: RunDoc, state: RunState, meta: RunMeta):
     out.push(`## ${phase.title}${phase.badge ? ` [${phase.badge}]` : ''}`, '');
     for (const group of phase.groups) {
       for (const step of group.steps) {
-        out.push(...renderStepLines(step.label, stepState(state, step.id)));
+        out.push(...renderStepLines(step.label, stepState(state, step.id), step.stableId));
       }
     }
     out.push('');
@@ -105,8 +110,19 @@ export function serializeIssueBody(doc: RunDoc, state: RunState, meta: RunMeta):
 interface BodyTask {
   lineIndex: number;
   checked: boolean;
+  /** Label text with any trailing stable-id comment removed. */
   label: string;
+  /** Verbatim token captured from a trailing `<!-- ... -->` on the task line. */
+  stableId?: string;
 }
+
+// Same generic shape as parse.ts STEP_ID_RE: a trailing HTML comment carrying a
+// single whitespace-free token. Captured off the task line so it neither
+// corrupts exact-label matching nor renders in the issue. A token that swallowed
+// an embedded `-->` (e.g. `<!-- a-->b -->`) is rejected, mirroring the parser, so
+// it is never re-emitted to leak visible text past the terminator.
+const BODY_ID_RE = /\s*<!--\s*(\S+)\s*-->\s*$/;
+const isUsableIdToken = (token: string): boolean => !token.includes('-->');
 
 /** Scan top-level task lines, skipping fenced code regions so a `- [ ]` inside
  *  a fence is never treated as a tracked task. */
@@ -130,38 +146,83 @@ function scanBodyTasks(lines: string[]): BodyTask[] {
     }
     if (inFence) continue;
     const m = line.match(TASK_LINE_RE);
-    if (m) tasks.push({ lineIndex: i, checked: m[1].toLowerCase() === 'x', label: m[2].trim() });
+    if (m) {
+      let label = m[2].trim();
+      let stableId: string | undefined;
+      const idm = label.match(BODY_ID_RE);
+      if (idm && isUsableIdToken(idm[1])) {
+        stableId = idm[1];
+        label = label.slice(0, idm.index).trimEnd();
+      }
+      tasks.push({ lineIndex: i, checked: m[1].toLowerCase() === 'x', label, ...(stableId ? { stableId } : {}) });
+    }
   }
   return tasks;
 }
 
 /**
- * Anchor doc steps to body task lines by EXACT label text. Among duplicate
- * labels the k-th doc step maps to the k-th body line with that label (ordinal
- * disambiguation; position is only a tiebreak within a label). Body lines with
- * no matching doc label stay foreign/untouched; doc steps with no matching line
- * stay unrepresented. Returns the line-index → step map and the matched-step set.
+ * Anchor doc steps to body task lines. Two passes:
+ *
+ *  1. By STABLE ID: a doc step with a stableId claims the body task carrying the
+ *     same id (exact string equality). This is what survives a label/prose edit
+ *     of the box — the fix for the resume-orphan bug. Only the FIRST doc step
+ *     with a given id matches by id; any later duplicate falls through to the
+ *     label pass, so a non-unique id can never silently mis-map the rest.
+ *  2. By EXACT label (the long-standing fallback), over the steps and body tasks
+ *     not already claimed in pass 1. Among duplicate labels the k-th remaining
+ *     doc step maps to the k-th remaining body line with that label (ordinal
+ *     disambiguation; position is only a tiebreak within a label).
+ *
+ * Body lines with no match stay foreign/untouched; doc steps with no match stay
+ * unrepresented. Returns the line-index → step map and the matched-step set.
  */
 function matchStepsToTasks(
   flat: Array<{ step: Step }>,
   tasks: BodyTask[],
 ): { taskToStep: Map<number, { step: Step }>; matchedSteps: Set<number> } {
+  const taskToStep = new Map<number, { step: Step }>();
+  const matchedSteps = new Set<number>();
+  const usedTasks = new Set<number>();
+
+  // Pass 1: stable id.
+  const byId = new Map<string, BodyTask[]>();
+  for (const t of tasks) {
+    if (!t.stableId) continue;
+    const list = byId.get(t.stableId);
+    if (list) list.push(t);
+    else byId.set(t.stableId, [t]);
+  }
+  const claimedDocIds = new Set<string>();
+  flat.forEach((entry, si) => {
+    const sid = entry.step.stableId;
+    if (!sid || claimedDocIds.has(sid)) return; // first doc step per id only
+    claimedDocIds.add(sid);
+    const list = byId.get(sid);
+    if (!list || list.length === 0) return;
+    const t = list[0];
+    taskToStep.set(t.lineIndex, entry);
+    usedTasks.add(t.lineIndex);
+    matchedSteps.add(si);
+  });
+
+  // Pass 2: exact label, over what pass 1 left unclaimed.
   const byLabel = new Map<string, BodyTask[]>();
   for (const t of tasks) {
+    if (usedTasks.has(t.lineIndex)) continue;
     const list = byLabel.get(t.label);
     if (list) list.push(t);
     else byLabel.set(t.label, [t]);
   }
   const cursor = new Map<string, number>();
-  const taskToStep = new Map<number, { step: Step }>();
-  const matchedSteps = new Set<number>();
   flat.forEach((entry, si) => {
-    const list = byLabel.get(entry.step.label.trim());
+    if (matchedSteps.has(si)) return;
+    const key = entry.step.label.trim();
+    const list = byLabel.get(key);
     if (!list) return;
-    const k = cursor.get(entry.step.label.trim()) ?? 0;
+    const k = cursor.get(key) ?? 0;
     if (k < list.length) {
       taskToStep.set(list[k].lineIndex, entry);
-      cursor.set(entry.step.label.trim(), k + 1);
+      cursor.set(key, k + 1);
       matchedSteps.add(si);
     }
   });
@@ -177,6 +238,7 @@ export function applyStateToBody(existingBody: string, doc: RunDoc, state: RunSt
   const flat = flattenSteps(doc);
   const lines = toLF(existingBody).split('\n');
   const tasks = scanBodyTasks(lines);
+  const taskByLine = new Map(tasks.map((t) => [t.lineIndex, t]));
   const { taskToStep } = matchStepsToTasks(flat, tasks);
   const out: string[] = [];
 
@@ -186,8 +248,11 @@ export function applyStateToBody(existingBody: string, doc: RunDoc, state: RunSt
       out.push(lines[i]);
       continue;
     }
-    const label = lines[i].match(TASK_LINE_RE)![2];
-    out.push(...renderStepLines(label, stepState(state, entry.step.id)));
+    // Keep the body line's own (comment-stripped) label so a hand-edited label
+    // is preserved, and re-emit the step's stable-id comment (upgrading a
+    // pre-id issue line to carry the id going forward).
+    const label = taskByLine.get(i)?.label ?? lines[i].match(TASK_LINE_RE)![2];
+    out.push(...renderStepLines(label, stepState(state, entry.step.id), entry.step.stableId));
     // Drop the old note bullets that belonged to this matched step only.
     let j = i + 1;
     while (j < lines.length && NOTE_BULLET_RE.test(lines[j])) j++;

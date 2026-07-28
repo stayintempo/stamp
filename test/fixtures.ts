@@ -81,3 +81,32 @@ export const numericPhaseFiles: SourceFile[] = [
   { path: 'QA/01-descale.md', content: maintenance01 },
   { path: 'QA/02-filter.md', content: maintenance02 },
 ];
+
+// A single-file checklist whose boxes carry coverage badges and stable-id
+// trailing comments (the `qa:NN.slug` convention). The first two boxes have
+// ids; the third has none (mixed doc). Used to exercise stable identity
+// end-to-end. `idStepsV2` edits the first box's bold lead (its label) while
+// keeping the same stable id — the label-edit orphan-bug scenario.
+export const idSource = {
+  owner: 'acme',
+  repo: 'coffee-qa',
+  ref: 'main',
+  sha: 'idsha00001111',
+  path: 'QA/steps.md',
+};
+
+export const idStepsV1 = `# Machine QA
+
+- [ ] 🤖 auto **Power on.** Flip the switch on [the panel](https://machine.local/panel). <!-- qa:01.power -->
+- [ ] 🌱 spot check **Brew espresso.** Press the single-cup button. <!-- qa:02.brew -->
+- [ ] **Check crema.** A thin layer of crema forms on top.
+`;
+
+// Same boxes, but the first box's bold lead (label) is reworded. Stable ids
+// are unchanged, so an in-flight run must still map by id.
+export const idStepsV2 = `# Machine QA
+
+- [ ] 🤖 auto **Power up the rig.** Flip the switch on [the panel](https://machine.local/panel). <!-- qa:01.power -->
+- [ ] 🌱 spot check **Brew espresso.** Press the single-cup button. <!-- qa:02.brew -->
+- [ ] **Check crema.** A thin layer of crema forms on top.
+`;
