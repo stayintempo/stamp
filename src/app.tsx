@@ -377,9 +377,11 @@ export function App({ createClient }: AppProps = {}) {
       return false;
     }
 
-    // localStorage is the truth: if a local run exists for this (doc, sha, issue)
-    // adopt it and schedule a PATCH to bring the issue up to date; otherwise read
-    // state out of the issue body (H4b).
+    // Resume state comes from reconciling the issue body with any local run for
+    // this (doc, sha, issue): the tester's explicit local verdicts win, while
+    // external evidence in the issue (a seed-qa check) upgrades a provisional
+    // local auto-skip or pending. With no local run, the issue body is the state
+    // (H4b).
     const local = loadRunState(canonical, d.source.sha, found.number);
     const hasLocal = Object.keys(local.statuses).length > 0;
     // Read the issue body (which reflects any seed-qa checks) and reconcile it

@@ -431,7 +431,7 @@ describe('stable step ids (stamp#26)', () => {
     const step = flattenSteps(p)[0].step;
     expect(step.stableId).toBeUndefined();
     expect(step.id).toMatch(/^QA\/m\.md#1-[0-9a-f]{8}$/);
-    // "left in place" — the non-conforming comment stays in the body text.
+    // "left in place": the non-conforming comment stays in the body text.
     expect(step.bodyMarkdown).toContain('<!-- not a single token -->');
   });
 

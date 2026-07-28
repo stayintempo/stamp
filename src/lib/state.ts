@@ -192,7 +192,7 @@ function scanBodyTasks(lines: string[]): BodyTask[] {
  *
  *  1. By STABLE ID: a doc step with a stableId claims the body task carrying the
  *     same id (exact string equality). This is what survives a label/prose edit
- *     of the box — the fix for the resume-orphan bug. Only the FIRST doc step
+ *     of the box, the fix for the resume-orphan bug. Only the FIRST doc step
  *     with a given id matches by id; any later duplicate falls through to the
  *     label pass, so a non-unique id can never silently mis-map the rest.
  *  2. By EXACT label (the long-standing fallback), over the steps and body tasks

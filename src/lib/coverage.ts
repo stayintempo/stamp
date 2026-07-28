@@ -1,4 +1,4 @@
-// coverage.ts — read a QA/COVERAGE.md "Per-box ledger" into a stableId -> tag map.
+// coverage.ts: read a QA/COVERAGE.md "Per-box ledger" into a stableId -> tag map.
 //
 // The ledger is the machine-readable side of the coverage contract. Its
 // "## Per-box ledger" section is a 6-column markdown table:

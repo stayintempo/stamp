@@ -86,7 +86,7 @@ export const numericPhaseFiles: SourceFile[] = [
 // trailing comments (the `qa:NN.slug` convention). The first two boxes have
 // ids; the third has none (mixed doc). Used to exercise stable identity
 // end-to-end. `idStepsV2` edits the first box's bold lead (its label) while
-// keeping the same stable id — the label-edit orphan-bug scenario.
+// keeping the same stable id (the label-edit orphan-bug scenario).
 export const idSource = {
   owner: 'acme',
   repo: 'coffee-qa',

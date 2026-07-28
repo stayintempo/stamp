@@ -17,7 +17,7 @@ export interface Source {
 export interface Step {
   /**
    * `{filePath}#id:{stableId}` when the box carries a trailing-comment id,
-   * else `{filePath}#{ordinal}-{shortHash}` — stable within a doc version.
+   * else `{filePath}#{ordinal}-{shortHash}`, stable within a doc version.
    */
   id: string;
   /**

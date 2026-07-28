@@ -115,7 +115,7 @@ describe('stable-id resume (orphan-bug regression)', () => {
     const s1 = setStep(emptyState(), flatV1[0].step.id, { status: 'pass' });
     const body = serializeIssueBody(v1, s1, idMeta);
 
-    // The first box's bold lead (label) is reworded in v2 — same stable id.
+    // The first box's bold lead (label) is reworded in v2, same stable id.
     // Today's exact-label matcher would orphan the pass; the id matcher keeps it.
     const resumed = parseIssueBody(body, v2);
     expect(resumed.statuses[flatV2[0].step.id]?.status).toBe('pass');
