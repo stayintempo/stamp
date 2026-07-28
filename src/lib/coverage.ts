@@ -23,7 +23,7 @@ const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const HEADING_RE = /^#{1,6}\s+(.*?)\s*#*\s*$/;
 const LEDGER_HEADING_RE = /^#{1,6}\s+Per-box ledger\b/i;
 
-/** Tags whose boxes a machine already covers (kept identical to seed-qa's set). */
+/** Tags whose boxes a machine already covers (kept identical to the external check-off job's set). */
 export const MACHINE_COVERED_TAGS = new Set(['CI', 'SEED']);
 
 /** Strip a single pair of surrounding backticks and trim, so `` `qa:01.x` `` == `qa:01.x`. */
@@ -93,9 +93,9 @@ export function parseCoverageLedger(markdown: string): Map<string, string> {
 /**
  * Pre-seed a run for reduced mode: every machine-covered box (tag CI or SEED)
  * that is still `pending` becomes an auto-skip carrying a provisional `auto:`
- * note. Never overwrites an existing status, so a tester verdict or a seed-qa
- * check already imported into the state survives. Returns the new state and the
- * number of boxes auto-skipped (for the banner).
+ * note. Never overwrites an existing status, so a tester verdict or an
+ * externally written check already imported into the state survives. Returns
+ * the new state and the number of boxes auto-skipped (for the banner).
  */
 export function preSeedReduced(
   doc: RunDoc,

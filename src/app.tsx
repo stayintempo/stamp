@@ -155,10 +155,10 @@ export function App({ createClient }: AppProps = {}) {
       const current = await client.getIssue(d.source.owner, d.source.repo, iss.number);
       lastBody.current = current.body;
       // Fold any external evidence the live body gained since our last write
-      // (e.g. a seed-qa check) back into local state before rewriting, so this
-      // PATCH never deletes what an external writer changed mid-session. Same
-      // precedence as resume: the tester's explicit verdicts win; external
-      // evidence upgrades a provisional pending / `auto:` pre-seed.
+      // (e.g. an external check-off job's check) back into local state before
+      // rewriting, so this PATCH never deletes what an external writer changed
+      // mid-session. Same precedence as resume: the tester's explicit verdicts
+      // win; external evidence upgrades a provisional pending / `auto:` pre-seed.
       const reconciled = reconcileResumeState(parseIssueBody(current.body, d), rs);
       if (JSON.stringify(reconciled.statuses) !== JSON.stringify(rs.statuses)) {
         setRunState(reconciled);
@@ -309,7 +309,7 @@ export function App({ createClient }: AppProps = {}) {
       const title = `QA run: ${d.source.path || '/'} @ ${d.source.ref} (${date})`;
       // A new run is always fresh, so pre-seed reduced-mode auto-skips (if any) and
       // serialize them straight into the created body. That closes the ~3s window
-      // where an all-pending body would have raced the external seed-qa writer.
+      // where an all-pending body would have raced the external check-off writer.
       const { state: seeded, count } = reducedPreSeed(d, emptyState());
       const body = serializeIssueBody(d, seeded, meta(d));
       const created = await client.createIssue(d.source.owner, d.source.repo, title, body);
@@ -379,13 +379,13 @@ export function App({ createClient }: AppProps = {}) {
 
     // Resume state comes from reconciling the issue body with any local run for
     // this (doc, sha, issue): the tester's explicit local verdicts win, while
-    // external evidence in the issue (a seed-qa check) upgrades a provisional
+    // external evidence in the issue (an external check-off) upgrades a provisional
     // local auto-skip or pending. With no local run, the issue body is the state
     // (H4b).
     const local = loadRunState(canonical, d.source.sha, found.number);
     const hasLocal = Object.keys(local.statuses).length > 0;
-    // Read the issue body (which reflects any seed-qa checks) and reconcile it
-    // with local state so seed-qa evidence upgrades a provisional auto-skip while
+    // Read the issue body (which reflects any external check-offs) and reconcile it
+    // with local state so external evidence upgrades a provisional auto-skip while
     // the tester's own verdicts win. Resume never pre-seeds reduced mode; that is
     // a new-run action only, so a toggled-on resume cannot mass-skip a shared run.
     const issueState = parseIssueBody(found.body, d);
@@ -495,7 +495,7 @@ export function App({ createClient }: AppProps = {}) {
     if (!current) return;
     // A verdict (or a manual skip) applied over a reduced-mode `auto:` pre-seed is
     // the tester's own decision: drop the inherited provisional note so it is not
-    // mistaken for seed-qa evidence and later downgraded by a reconcile.
+    // mistaken for external evidence and later downgraded by a reconcile.
     const clearsAuto = stepState(runState, current.step.id).note?.startsWith('auto:');
     persist(setStep(runState, current.step.id, clearsAuto ? { status, note: undefined } : { status }));
     if (status === 'fail') {

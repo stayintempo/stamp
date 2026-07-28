@@ -66,19 +66,19 @@ export function isProvisional(st: StepState): boolean {
 }
 
 /**
- * Reconcile a resumed issue's state with local state for the seed-qa coexistence
- * rules. The tester's own explicit verdicts (any non-`auto:` local status) win,
- * as before. Where local is only provisional (pending or an `auto:` pre-seed), a
- * non-pending issue status is adopted so seed-qa evidence (a checked box with a
- * `📝 seeded/qaassert` note) upgrades an auto-skip. Issue statuses for steps with
- * no local entry are kept.
+ * Reconcile a resumed issue's state with local state for the external check-off
+ * coexistence rules. The tester's own explicit verdicts (any non-`auto:` local
+ * status) win, as before. Where local is only provisional (pending or an `auto:`
+ * pre-seed), a non-pending issue status is adopted so external evidence (a
+ * checked box with a `📝` provenance note) upgrades an auto-skip. Issue statuses
+ * for steps with no local entry are kept.
  */
 export function reconcileResumeState(issue: RunState, local: RunState): RunState {
   const statuses: Record<string, StepState> = { ...issue.statuses };
   for (const [id, st] of Object.entries(local.statuses)) {
     if (isProvisional(st)) {
       // Keep the provisional status only when the issue side has nothing better;
-      // otherwise the issue (seed-qa evidence) wins and upgrades it.
+      // otherwise the issue (external evidence) wins and upgrades it.
       if (!statuses[id]) statuses[id] = st;
     } else {
       statuses[id] = st; // explicit tester verdict always wins
@@ -317,9 +317,9 @@ export function parseIssueBody(body: string, doc: RunDoc): RunState {
       } else if (skip) {
         // A `⏭ skipped` bullet only downgrades an UNCHECKED line. On a checked
         // (`- [x]`) line the box is a pass (or fail); a lingering skip bullet, such
-        // as STAMP's own auto-skip that seed-qa left behind when it flipped the
-        // box, must never turn the pass back into a skip. The note, if any, comes
-        // from a later `📝` bullet.
+        // as STAMP's own auto-skip that the external writer left behind when it
+        // flipped the box, must never turn the pass back into a skip. The note, if
+        // any, comes from a later `📝` bullet.
         if (!t.checked) {
           status = 'skip';
           if (skip[1]) note = skip[1].trim() || undefined;

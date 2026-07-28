@@ -91,7 +91,7 @@ const TASK_RE = /^[-*+]\s+\[[ xX]\]\s+.*$/;
 const TASK_PREFIX_RE = /^[-*+]\s+\[[ xX]\]\s?/;
 // A trailing HTML comment carrying a single whitespace-free token, used as the
 // box's stable id. STAMP is generic (stamp#26): ANY such token is accepted
-// verbatim; the `qa:NN.slug` shape is a tempo-repo convention, not enforced
+// verbatim; the `ns:NN.slug` shape is an upstream-repo convention, not enforced
 // here. A comment with whitespace inside (multiple tokens) does not match and
 // is left in place, ignored, so behavior is unchanged for non-conforming docs.
 const STEP_ID_RE = /\s*<!--\s*(\S+)\s*-->\s*$/;
