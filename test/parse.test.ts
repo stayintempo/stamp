@@ -435,6 +435,19 @@ describe('stable step ids (stamp#26)', () => {
     expect(step.bodyMarkdown).toContain('<!-- not a single token -->');
   });
 
+  it('rejects a token that swallowed an embedded --> and leaves the comment in place', () => {
+    // `\S+` would capture `a-->b`; re-emitting `<!-- a-->b -->` leaks "b -->" as
+    // visible text in the rendered issue. Such a token is rejected: no stableId,
+    // legacy id, comment left untouched (behaves as a malformed comment does).
+    const p = buildRunDoc(src, [
+      { path: 'QA/bad.md', content: '# B\n- [ ] **A.** do it <!-- a-->b -->' },
+    ]);
+    const step = flattenSteps(p)[0].step;
+    expect(step.stableId).toBeUndefined();
+    expect(step.id).toMatch(/^QA\/bad\.md#1-[0-9a-f]{8}$/);
+    expect(step.bodyMarkdown).toContain('<!-- a-->b -->');
+  });
+
   it('an id edit alone does not shift another box’s legacy hash id (isolation)', () => {
     // Two boxes: the first has an id, the second does not. Changing the FIRST
     // box’s id must not perturb the SECOND box’s positional+hash id, because

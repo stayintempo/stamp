@@ -158,6 +158,20 @@ describe('stable-id resume (orphan-bug regression)', () => {
     expect(parsed.statuses[flat[1].step.id]).toEqual({ status: 'fail', note: 'boom' });
   });
 
+  it('leaves a body task line whose --> comment is malformed untouched (body-side guard)', () => {
+    const flat = flattenSteps(doc);
+    let body = serializeIssueBody(doc, emptyState(), meta);
+    // Corrupt the first step's line with a token that swallowed the terminator.
+    body = body.replace('- [ ] Power on.', '- [x] Power on. <!-- a-->b -->');
+    const s = stateWith({ 0: { status: 'pass' } });
+    const merged = applyStateToBody(body, doc, s);
+    // The malformed token is not captured as an id, so it is not stripped off the
+    // label; the retained comment makes the label differ from "Power on." and the
+    // line stays foreign and preserved verbatim (never re-emitted to leak text).
+    expect(merged).toContain('- [x] Power on. <!-- a-->b -->');
+    expect(parseIssueBody(merged, doc).statuses[flat[0].step.id]).toBeUndefined();
+  });
+
   it('an id-less doc serializes exactly as before (no comments emitted)', () => {
     const legacy = serializeIssueBody(doc, emptyState(), meta);
     expect(legacy).not.toContain('<!-- qa:');

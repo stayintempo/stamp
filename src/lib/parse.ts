@@ -91,10 +91,15 @@ const TASK_RE = /^[-*+]\s+\[[ xX]\]\s+.*$/;
 const TASK_PREFIX_RE = /^[-*+]\s+\[[ xX]\]\s?/;
 // A trailing HTML comment carrying a single whitespace-free token, used as the
 // box's stable id. STAMP is generic (stamp#26): ANY such token is accepted
-// verbatim — the `qa:NN.slug` shape is a tempo-repo convention, not enforced
+// verbatim; the `qa:NN.slug` shape is a tempo-repo convention, not enforced
 // here. A comment with whitespace inside (multiple tokens) does not match and
 // is left in place, ignored, so behavior is unchanged for non-conforming docs.
 const STEP_ID_RE = /\s*<!--\s*(\S+)\s*-->\s*$/;
+// `\S+` can also swallow an embedded `-->` (e.g. `<!-- a-->b -->`); re-emitting
+// such a token would leak visible text past the first `-->` in the rendered
+// issue. Reject any captured token containing the comment terminator: the line
+// is treated as having no id and the comment is left in place.
+const isUsableIdToken = (token: string): boolean => !token.includes('-->');
 
 function trimBlankEdges(lines: string[]): string[] {
   let start = 0;
@@ -114,7 +119,7 @@ function finalizeStep(stepLines: string[], separatorBefore: string | undefined):
   let firstContent = first.slice(markerLen);
   let stableId: string | undefined;
   const idMatch = firstContent.match(STEP_ID_RE);
-  if (idMatch) {
+  if (idMatch && isUsableIdToken(idMatch[1])) {
     stableId = idMatch[1];
     firstContent = firstContent.slice(0, idMatch.index).trimEnd();
   }

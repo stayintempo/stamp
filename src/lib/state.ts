@@ -118,8 +118,11 @@ interface BodyTask {
 
 // Same generic shape as parse.ts STEP_ID_RE: a trailing HTML comment carrying a
 // single whitespace-free token. Captured off the task line so it neither
-// corrupts exact-label matching nor renders in the issue.
+// corrupts exact-label matching nor renders in the issue. A token that swallowed
+// an embedded `-->` (e.g. `<!-- a-->b -->`) is rejected, mirroring the parser, so
+// it is never re-emitted to leak visible text past the terminator.
 const BODY_ID_RE = /\s*<!--\s*(\S+)\s*-->\s*$/;
+const isUsableIdToken = (token: string): boolean => !token.includes('-->');
 
 /** Scan top-level task lines, skipping fenced code regions so a `- [ ]` inside
  *  a fence is never treated as a tracked task. */
@@ -147,7 +150,7 @@ function scanBodyTasks(lines: string[]): BodyTask[] {
       let label = m[2].trim();
       let stableId: string | undefined;
       const idm = label.match(BODY_ID_RE);
-      if (idm) {
+      if (idm && isUsableIdToken(idm[1])) {
         stableId = idm[1];
         label = label.slice(0, idm.index).trimEnd();
       }
