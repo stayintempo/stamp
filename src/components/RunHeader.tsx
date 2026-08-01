@@ -16,6 +16,8 @@ interface Props {
   phase?: { number: number; count: number; title: string };
   /** How many steps reduced mode auto-skipped at run start (0 = no banner). */
   autoSkipped?: number;
+  /** Reduced mode ran against this checklist's COVERAGE.md and seeded nothing. */
+  coverageUnused?: boolean;
   phasesOpen: boolean;
   onOpenPhases: () => void;
   onRetrySync?: () => void;
@@ -64,6 +66,7 @@ export function RunHeader({
   syncNotice,
   phase,
   autoSkipped,
+  coverageUnused,
   phasesOpen,
   onOpenPhases,
   onRetrySync,
@@ -86,6 +89,11 @@ export function RunHeader({
       {autoSkipped != null && autoSkipped > 0 && (
         <div class="reduced-banner">
           {autoSkipped} step{autoSkipped === 1 ? '' : 's'} auto-skipped (machine-covered)
+        </div>
+      )}
+      {coverageUnused && (
+        <div class="reduced-banner" title="Check the browser console for any ledger parse warnings.">
+          Reduced run: nothing was auto-skipped. This checklist's COVERAGE.md matched no steps.
         </div>
       )}
       {phase && (
