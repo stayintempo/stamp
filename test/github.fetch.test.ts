@@ -202,7 +202,7 @@ describe('loadRunDoc (end-to-end over injected fetch)', () => {
         { path: 'QA/COVERAGE.md', type: 'blob' },
       ],
     };
-    const ledger = '## Per-box ledger\n\n| Sec | # | Box | Tag | Owner | ID |\n| - | - | - | - | - | - |\n| 01 | 1 | Login | CI | dev | qa:01.login |';
+    const ledger = '## Per-box ledger\n\n| Sec | # | Box | Tag | Owner | ID | Role |\n| - | - | - | - | - | - | - |\n| 01 | 1 | Login | CI | dev | qa:01.login | - |';
     const fetchImpl = vi.fn(async (url: string) => {
       if (/\/repos\/[^/]+\/[^/]+$/.test(url)) return res({ default_branch: 'main' });
       if (url.includes('/commits/')) return res({ sha: 'sha7' });

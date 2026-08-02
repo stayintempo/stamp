@@ -107,8 +107,9 @@ export function SetupScreen({ initial, busy, error, onConnect, onClearToken }: P
             Reduced run: auto-skip machine-covered steps
           </label>
           <p class="hint">
-            When the checklist ships a <code>COVERAGE.md</code> ledger, boxes tagged CI or SEED start
-            auto-skipped. You can un-skip any of them.
+            When the checklist ships a <code>COVERAGE.md</code> ledger, the boxes a machine already
+            covers start auto-skipped, except the steps the ledger marks as yours, like signing in
+            and tearing down. You can un-skip any of them.
           </p>
         </div>
 

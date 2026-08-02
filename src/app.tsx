@@ -104,6 +104,7 @@ export function App({ createClient }: AppProps = {}) {
   const [syncNotice, setSyncNotice] = useState(0);
   const [shaMismatch, setShaMismatch] = useState<IssueRef | null>(null);
   const [autoSkipped, setAutoSkipped] = useState(0);
+  const [coverageUnused, setCoverageUnused] = useState(false);
 
   const clientRef = useRef<GithubClient | null>(null);
   // Latest values for the debounced PATCH, which closes over stale state otherwise.
@@ -127,16 +128,31 @@ export function App({ createClient }: AppProps = {}) {
 
   /**
    * Reduced-mode pre-seed: with the toggle on and the doc carrying a COVERAGE.md
-   * ledger, auto-skip every still-pending machine-covered (CI/SEED) box. Returns
-   * the seeded state and the count (0 when off or no ledger). Always applied to
-   * state that has ALREADY absorbed any imported issue/local status, so it never
-   * overwrites a real verdict.
+   * ledger, auto-skip every still-pending box a machine already covers. Returns the
+   * seeded state, the count, how many steps the ledger matched, and whether we
+   * actually tried (toggle on AND a COVERAGE.md present), so a run that tried and
+   * matched nothing can say so instead of looking identical to a run with the toggle
+   * off. Always applied to state that has ALREADY absorbed any imported issue/local
+   * status, so it never overwrites a real verdict.
    */
-  function reducedPreSeed(d: RunDoc, state: RunState): { state: RunState; count: number } {
-    if (!latest.current.settings.reducedMode || !d.coverage) return { state, count: 0 };
+  function reducedPreSeed(
+    d: RunDoc,
+    state: RunState,
+  ): { state: RunState; count: number; matched: number; attempted: boolean } {
+    if (!latest.current.settings.reducedMode || !d.coverage)
+      return { state, count: 0, matched: 0, attempted: false };
     const cov = parseCoverageLedger(d.coverage);
-    if (cov.size === 0) return { state, count: 0 };
-    return preSeedReduced(d, state, cov);
+    // A COVERAGE.md with no usable ledger is the one empty parse the lib stays quiet
+    // about, since on its own it cannot tell "this checklist has no ledger" from a
+    // breakage. Here we know a coverage file WAS fetched, so say so: the notice below
+    // promises the console has something, and this is what keeps that true.
+    if (cov.size === 0)
+      console.warn(
+        '[stamp] coverage: COVERAGE.md is present but carries no usable per-box ledger, ' +
+          'so reduced mode will auto-skip nothing.',
+      );
+    const seeded = preSeedReduced(d, state, cov);
+    return { ...seeded, attempted: true };
   }
 
   // --- issue-body PATCH, debounced ~3s after the last change ---
@@ -310,13 +326,16 @@ export function App({ createClient }: AppProps = {}) {
       // A new run is always fresh, so pre-seed reduced-mode auto-skips (if any) and
       // serialize them straight into the created body. That closes the ~3s window
       // where an all-pending body would have raced the external check-off writer.
-      const { state: seeded, count } = reducedPreSeed(d, emptyState());
+      const { state: seeded, count, matched, attempted } = reducedPreSeed(d, emptyState());
       const body = serializeIssueBody(d, seeded, meta(d));
       const created = await client.createIssue(d.source.owner, d.source.repo, title, body);
       setIssue(created);
       setLocalOnly(false);
       lastBody.current = created.body;
       setAutoSkipped(count);
+      // `matched`, not `count`: a ledger of purely manual work skips nothing and is
+      // working exactly as intended. Only a ledger that matched no step is a problem.
+      setCoverageUnused(attempted && matched === 0);
       setRunState(seeded);
       saveRunState(canonicalDocUrl(d.source), d.source.sha, created.number, seeded);
       setSyncNotice(0);
@@ -391,6 +410,7 @@ export function App({ createClient }: AppProps = {}) {
     const issueState = parseIssueBody(found.body, d);
     const state = hasLocal ? reconcileResumeState(issueState, local) : issueState;
     setAutoSkipped(0);
+    setCoverageUnused(false); // never accuse the ledger on a path that never consulted it
 
     setIssue(found);
     setLocalOnly(false);
@@ -424,8 +444,11 @@ export function App({ createClient }: AppProps = {}) {
     // resuming an existing local run never pre-seeds, matching the new-run-only
     // rule and the toggle's "takes effect on the next run you start" hint.
     const fresh = Object.keys(restored.statuses).length === 0;
-    const { state: seeded, count } = fresh ? reducedPreSeed(d, restored) : { state: restored, count: 0 };
+    const { state: seeded, count, matched, attempted } = fresh
+      ? reducedPreSeed(d, restored)
+      : { state: restored, count: 0, matched: 0, attempted: false };
     setAutoSkipped(count);
+    setCoverageUnused(attempted && matched === 0);
     if (count > 0) saveRunState(canonicalDocUrl(d.source), d.source.sha, null, seeded);
     setRunState(seeded);
     setCurrentIndex(firstPending(d, seeded));
@@ -648,6 +671,7 @@ export function App({ createClient }: AppProps = {}) {
             : undefined
         }
         autoSkipped={autoSkipped}
+        coverageUnused={coverageUnused}
         phasesOpen={phasesOpen}
         onOpenPhases={() => setPhasesOpen(true)}
         onRetrySync={retrySync}

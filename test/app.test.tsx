@@ -471,15 +471,16 @@ describe('summary posting (M6)', () => {
 
 describe('reduced mode (phase 2)', () => {
   const README =
-    '# QA\n\n- [ ] **Alpha.** a <!-- qa:01.a -->\n- [ ] **Beta.** b <!-- qa:02.b -->\n- [ ] **Gamma.** c <!-- qa:03.c -->';
+    '# QA\n\n- [ ] **Alpha.** a <!-- qa:01.a -->\n- [ ] **Beta.** b <!-- qa:02.b -->\n- [ ] **Gamma.** c <!-- qa:03.c -->\n- [ ] **Delta.** d <!-- qa:04.d -->';
   const LEDGER = [
     '## Per-box ledger',
     '',
-    '| Sec | # | Box | Tag | Owner | ID |',
-    '| - | - | - | - | - | - |',
-    '| 01 | 1 | Alpha | CI | dev | qa:01.a |',
-    '| 01 | 2 | Beta | CHECK | qa | qa:02.b |',
-    '| 01 | 3 | Gamma | SEED | dev | qa:03.c |',
+    '| Sec | # | Box | Tag | Owner | ID | Role |',
+    '| - | - | - | - | - | - | - |',
+    '| 01 | 1 | Alpha | CI | dev | qa:01.a | - |',
+    '| 01 | 2 | Beta | CHECK | qa | qa:02.b | - |',
+    '| 01 | 3 | Gamma | SEED | dev | qa:03.c | - |',
+    '| 01 | 4 | Delta | CI | dev | qa:04.d | session |',
   ].join('\n');
   const withCoverage: FakeOpts = {
     tree: [
@@ -489,7 +490,7 @@ describe('reduced mode (phase 2)', () => {
     rawFor: (p) => (p.includes('COVERAGE') ? LEDGER : README),
   };
 
-  it('auto-skips CI/SEED boxes and banners the count when enabled', async () => {
+  it('auto-skips machine-covered boxes and banners the count when enabled', async () => {
     const utils = renderApp(withCoverage);
     const input = utils.container.querySelector('#gh') as HTMLInputElement;
     fireEvent.input(input, { target: { value: 'o/r/QA' } });
@@ -500,7 +501,9 @@ describe('reduced mode (phase 2)', () => {
     fireEvent.click(utils.getByText(/Start a new run/));
     await waitFor(() => expect(utils.container.querySelector('.stepcard')).toBeTruthy());
     await flushEffects();
-    // qa:01.a (CI) + qa:03.c (SEED) auto-skipped = 2; qa:02.b (CHECK) untouched.
+    // qa:01.a (CI) + qa:03.c (SEED) auto-skipped = 2. qa:02.b (CHECK) is untouched,
+    // and so is qa:04.d: a CI row whose role is session is the tester's own click,
+    // so the role gate holds it back even though its tag is machine-covered.
     expect(utils.container.textContent).toMatch(/2 steps auto-skipped \(machine-covered\)/);
     // The run lands on the first pending (non-covered) box, Beta.
     expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Beta');
@@ -527,8 +530,10 @@ describe('reduced mode (phase 2)', () => {
     expect(createdBody).toMatch(/- \[ \] Alpha\. <!-- qa:01\.a -->/);
     expect(createdBody).toContain('auto: machine-covered (CI)');
     expect(createdBody).toContain('auto: machine-covered (SEED)');
-    // Beta (CHECK) is left pending, un-skipped; only the two covered boxes skip.
+    // Beta (CHECK) is left pending, un-skipped; so is Delta, a CI row the ledger
+    // marks session. Only the two covered boxes skip.
     expect(createdBody).toMatch(/- \[ \] Beta\. <!-- qa:02\.b -->/);
+    expect(createdBody).toMatch(/- \[ \] Delta\. <!-- qa:04\.d -->/);
     expect(createdBody.match(/⏭ skipped/g)?.length).toBe(2);
     // No follow-up PATCH is needed to add the skips.
     expect(utils.calls.updateIssueBody).not.toHaveBeenCalled();
@@ -558,8 +563,68 @@ describe('reduced mode (phase 2)', () => {
     const utils = renderApp(withCoverage);
     await startRun(utils); // connect() leaves the reduced box unchecked
     expect(utils.queryByText(/auto-skipped/)).toBeNull();
+    // We never consulted the ledger, so we must not accuse it either (negative).
+    expect(utils.queryByText(/matched no steps/)).toBeNull();
     // Every box is still pending: the run starts on Alpha.
     expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
+  });
+
+  it('notices when reduced mode found a ledger but auto-skipped nothing', async () => {
+    // The #34 failure shape: a ledger is present and parses, but nothing joins. A
+    // silent zero used to look exactly like a run with the toggle off.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stale = LEDGER.replace(/qa:0/g, 'old:0');
+    const utils = renderApp({
+      ...withCoverage,
+      rawFor: (p) => (p.includes('COVERAGE') ? stale : README),
+    });
+    await startReducedRun(utils);
+    expect(utils.getByText(/matched no steps/)).toBeTruthy();
+    // The count banner must NOT also appear: the two are mutually exclusive.
+    expect(utils.queryByText(/steps auto-skipped/)).toBeNull();
+    // Nothing was skipped, so the run starts on the very first box.
+    expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('says on the console when a COVERAGE.md carries no usable ledger', async () => {
+    // The notice tells the tester to check the console, so the console must have
+    // something. The parser alone stays quiet here: it cannot tell a checklist
+    // without a ledger from a broken one. Only the caller knows a file was fetched.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const utils = renderApp({
+      ...withCoverage,
+      rawFor: (p) => (p.includes('COVERAGE') ? '# Coverage\n\nComing soon.\n' : README),
+    });
+    await startReducedRun(utils);
+    expect(utils.getByText(/matched no steps/)).toBeTruthy();
+    expect(warn.mock.calls.map((c) => c[0]).join('\n')).toMatch(/no usable per-box ledger/);
+    warn.mockRestore();
+  });
+
+  it('shows no notice when the ledger matched every box but covers none (negative)', async () => {
+    // A ledger of purely manual work is healthy: it joins, and skipping nothing is
+    // the right answer. Accusing it of matching no steps would be a plain lie.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const manual = LEDGER.replace(/\| CI \|/g, '| CHECK |').replace(/\| SEED \|/g, '| O365 |');
+    const utils = renderApp({
+      ...withCoverage,
+      rawFor: (p) => (p.includes('COVERAGE') ? manual : README),
+    });
+    await startReducedRun(utils);
+    expect(utils.queryByText(/matched no steps/)).toBeNull();
+    expect(utils.queryByText(/steps auto-skipped/)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('shows no notice when the checklist ships no COVERAGE.md (negative)', async () => {
+    // No ledger is not a broken ledger. The default tree has README.md only.
+    const utils = renderApp({ rawFor: () => README });
+    await startReducedRun(utils);
+    expect(utils.queryByText(/matched no steps/)).toBeNull();
+    expect(utils.queryByText(/auto-skipped/)).toBeNull();
   });
 
   it('resuming an existing run with reduced mode on pre-seeds nothing (fix 7 negative)', async () => {
@@ -584,6 +649,8 @@ describe('reduced mode (phase 2)', () => {
     // No pre-seed on resume: no banner, and the run starts on the first box Alpha
     // (nothing was auto-skipped past it), so a toggled-on resume cannot mass-skip.
     expect(utils.queryByText(/auto-skipped/)).toBeNull();
+    // The resume path never consults the ledger, so it must never accuse it either.
+    expect(utils.queryByText(/matched no steps/)).toBeNull();
     expect(utils.container.querySelector('.stepcard')?.textContent).toContain('Alpha');
   });
 });
