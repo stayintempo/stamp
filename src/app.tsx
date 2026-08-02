@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { RunDoc, Phase, StepGroup, Step } from './lib/types';
+
 import {
   GithubClient,
   GithubError,
@@ -553,11 +554,11 @@ export function App({ createClient }: AppProps = {}) {
    * arrival at a step, so stepping back re-arms it.
    */
   const actedOn = useRef<string | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     actedOn.current = null;
   }, [currentIndex]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (view !== 'run' || modalOpen || !current) return;
     const handler = (e: KeyboardEvent) => {
       const action = resolveKeyAction(e, e.target as HTMLElement | null);
