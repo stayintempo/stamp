@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/stayintempo/stamp/compare/v0.1.0...v0.2.0) (2026-08-02)
+
+
+### Features
+
+* accept owner/repo/path@ref and surface the pinned ref at start ([#23](https://github.com/stayintempo/stamp/issues/23)) ([d3b1b7d](https://github.com/stayintempo/stamp/commit/d3b1b7d6d25f1abf24204e4c27d4c2fd29889453)), closes [#19](https://github.com/stayintempo/stamp/issues/19)
+* reduced mode with coverage-ledger auto-skips ([#28](https://github.com/stayintempo/stamp/issues/28)) ([0bf867d](https://github.com/stayintempo/stamp/commit/0bf867d7e3fbff70746d877447e80875532ccf71))
+* stable step ids from trailing comments ([#27](https://github.com/stayintempo/stamp/issues/27)) ([ec1f94c](https://github.com/stayintempo/stamp/commit/ec1f94c5ae8a335d760779fd8bf12f1ea26a1b97)), closes [#26](https://github.com/stayintempo/stamp/issues/26)
+
+
+### Bug Fixes
+
+* join reduced-mode ledger IDs by stripped namespace and unbreak the checkbox row ([#30](https://github.com/stayintempo/stamp/issues/30)) ([fe75a1a](https://github.com/stayintempo/stamp/commit/fe75a1aea0fa433532967657da6cf2af7ee34048))
+* parse the per-box ledger by header name and gate CI rows on role ([#35](https://github.com/stayintempo/stamp/issues/35)) ([e7cce4f](https://github.com/stayintempo/stamp/commit/e7cce4fe1c99c234c9ba3d76a0687edba1a69fb4))
+* use the themed card background for overlay panels ([#29](https://github.com/stayintempo/stamp/issues/29)) ([b945494](https://github.com/stayintempo/stamp/commit/b9454946aa3d440f770db3a18b5de568f16ba91f))
+
 ## 0.1.0 (2026-07-23)
 
 
